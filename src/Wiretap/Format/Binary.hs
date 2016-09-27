@@ -1,7 +1,5 @@
-{-# LANGUAGE BangPatterns #-}
 module Wiretap.Format.Binary where
 
-import Debug.Trace
 import System.IO
 
 import qualified Data.ByteString.Lazy as BL
@@ -19,13 +17,13 @@ import Wiretap.Data.Program
 readEvents :: Thread -> Handle -> IO [Event]
 readEvents t handle = do
   bytes <- BL.hGetContents handle
-  return $ runGet (getEvents t 0) bytes
+  return . ((Event t 0 nullInst Begin):) $ runGet (getEvents t 1) bytes
 
 getEvents :: Thread -> Int -> Get [Event]
 getEvents t i = do
   empty <- isEmpty
   if empty
-    then return []
+    then return [ Event t i nullInst End ]
     else do
       event <- getEvent t i
       rest <- getEvents t (i + 1)
@@ -35,7 +33,7 @@ getEvent :: Thread -> Int -> Get Event
 getEvent t i = do
   operation <- getWord8
   instruction <- getInstruction
-  let newEvent = traceShowId . Event t i instruction
+  let newEvent = Event t i instruction
   case operation .&. 0x0f of
 
     1 -> -- Fork

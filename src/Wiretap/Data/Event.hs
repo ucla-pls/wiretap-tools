@@ -6,7 +6,7 @@ import qualified Wiretap.Data.Program as Program
 
 -- The dynamic information of the program is represented here.
 
-newtype Thread = Thread { threadId :: Int } deriving (Show, Eq)
+newtype Thread = Thread { threadId :: Int } deriving (Show, Eq, Ord)
 
 data Event = Event { thread :: !Thread
                    , order :: !Int
@@ -41,4 +41,9 @@ data Operation = Acquire Ref
                | Read Location Value
                | Write Location Value
 
+               | Begin
+               | End
+
                deriving (Show, Eq)
+
+
