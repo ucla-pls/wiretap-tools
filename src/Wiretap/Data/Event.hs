@@ -14,7 +14,7 @@ data Event = Event { thread :: !Thread
                    , operation :: !Operation
                    } deriving (Show, Eq)
 
-newtype Ref = Ref { value :: Word32 } deriving (Show, Eq)
+newtype Ref = Ref { pointer :: Word32 } deriving (Show, Eq)
 
 data Location = Dynamic Ref Program.Field
               | Static Program.Field

@@ -31,6 +31,8 @@ parse "log" file = do
   where
     printLength h = do
       events <- parseLog file h
+      forM events $ \event ->
+        print event
       putStrLn $ "Successfully parsed " ++ show (length events) ++ " events"
 parse fileType file =
   exitWithUsageMessage patterns $ "Unknown file type \"" ++ fileType ++ "\"."

@@ -51,7 +51,7 @@ getEvent t i = do
     5 -> -- Release
       newEvent . Release <$> getRef
 
-    6 -> do -- Read
+    6 -> -- Read
       newEvent ... Read <$> getLocation <*> getValue operation
 
     7 -> -- Write
@@ -75,7 +75,7 @@ getEvent t i = do
 
     getLocation = do
       object <- getRef
-      if value object == 0
+      if pointer object == 0
         then Static <$> getField
         else Array object . fromIntegral <$> getWord32be
 

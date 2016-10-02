@@ -3,10 +3,13 @@
 
 module Wiretap.Analysis where
 
+import           Debug.Trace
+
 import           Control.Monad.State
 import           Control.Monad
 import           Control.Lens hiding ((...))
 
+import           Data.Maybe (maybeToList)
 import           Data.Monoid
 import           Data.Function (on)
 
@@ -58,7 +61,7 @@ data Order = Order
 
 class Monoid a => OrderAnalysis a where
   fromEvent :: EventId -> Event -> a
-  toOrders :: a -> [Order]
+  toOrders :: a -> [[Order]]
 
 fromEvents :: OrderAnalysis a => [Event] -> a
 fromEvents =
@@ -66,13 +69,19 @@ fromEvents =
 
 -- | orders, takes two lists and create orders between every event in the first
 -- list and to every event in the second list.
-orders :: [EventId] -> [EventId] -> [Order]
-orders = liftM2 Order
+orders :: [EventId] -> [EventId] -> [[Order]]
+orders = map (:[]) ... liftM2 Order
 
 -- | total, takes a list and create orders so that they the containing events
 -- are total ordered.
-total :: [EventId] -> [Order]
-total = ap (zipWith Order) tail
+totalOrder :: [EventId] -> [[Order]]
+totalOrder = map (:[]) . ap (zipWith $ Order) tail
+
+
+-- | Get unique pairs in list
+pairs :: [a] -> [(a, a)]
+pairs (a:rest) = map (\x -> (a, x)) rest ++ pairs rest
+pairs [] = []
 
 -- Must Happen Before Analysis
 data MhbData = MhbData
@@ -112,7 +121,7 @@ instance OrderAnalysis MHB where
   toOrders =
     foldMap mhbDataOrders . mhb
     where
-      mhbDataOrders :: MhbData -> [Order]
+      mhbDataOrders :: MhbData -> [[Order]]
       mhbDataOrders =
         concat . onAll
           [ order mhbForks mhbBegins
@@ -122,7 +131,8 @@ instance OrderAnalysis MHB where
 
 
 -- Sequential Consistency
-newtype SC = SC { cs :: IdMap [EventId] }
+newtype SC =
+  SC { cs :: IdMap [EventId] }
 
 instance Monoid SC where
   mempty = SC mempty
@@ -133,22 +143,76 @@ instance OrderAnalysis SC where
   fromEvent i (Event {thread = t}) =
     SC $ atThread t [i]
 
-  toOrders = foldMap total . cs
+  toOrders = foldMap totalOrder . cs
 
 -- Lock Consistency
+-- This analysis assumes that all locks are requested, acquired and released by
+-- the same thread.
 
-data LcLockTriple = LcLockTriple
-  { _lltAcquire :: Maybe EventId
-  , _lltRequire :: Maybe EventId
-  , _lltRelease :: Maybe EventId
-  }
 
-data LcData = LcData [LcLockTriple]
+data LcType
+  = LcAcquire EventId
+  | LcRelease EventId
+  deriving (Show)
 
-type LC = IdMap [EventId]
+type LcData =
+  IdMap [LcType]
 
-lock :: EventId -> Event -> LC
-lock i e = undefined
+newtype LC =
+  LC { lc :: IdMap LcData }
+  deriving (Show)
+
+instance Monoid LC where
+  mempty = LC mempty
+  mappend = LC ... mappend `on` lc
+
+type LcCollector = ([(EventId, EventId)], [EventId])
+
+instance OrderAnalysis LC where
+  fromEvent i (Event{operation=o, thread=t}) =
+    LC $ case o of
+      Acquire ref -> append ref $ [LcAcquire i]
+      Release ref -> append ref $ [LcRelease i]
+      _ -> mempty
+    where
+      append ref = atId (fromIntegral . Event.pointer $ ref) . atThread t
+
+  toOrders = foldMap byObject . lc
+    where
+      byObject :: LcData -> [[Order]]
+      byObject a =
+        concat
+          [ lockOrder <$> pairs lockPairs
+          , orderRemainders <$> lockPairs <*> remainders
+          ]
+        where
+          (lockPairs, remainders) =
+            foldMap (collectLockPairs . byThread) a
+
+      byThread :: [LcType] -> LcCollector
+      byThread types =
+        L.foldl' collector ([],[]) types
+
+      collector :: LcCollector -> LcType -> LcCollector
+      collector (pairs, stack) (LcAcquire acq) =
+        (pairs, acq:stack)
+
+      collector (pairs, stack) (LcRelease rel) =
+        case stack of
+          acq:[] -> ((acq, rel):pairs, [])
+          -- ^ Ignore re-entrant locks
+          acq:ls -> (pairs, ls)
+          _ -> error "Can't release a lock that has not been acquired"
+
+      collectLockPairs (pairs, stack) =
+        (pairs, take 1 stack)
+
+      lockOrder ((a, r), (a', r')) =
+        [r ~> a', r' ~> a]
+
+      orderRemainders (_, rel) acq =
+        [rel ~> acq]
+
 
 -- Top level analyses
 
@@ -161,5 +225,5 @@ linearizeTotal' events = do
   print (toOrders mhb')
   let sc' = fromEvents events :: SC
   print (toOrders sc')
-  -- let lc' = fromEvents events :: LC
-  -- print (toOrders lc')
+  let lc' = fromEvents events :: LC
+  print (toOrders lc')
