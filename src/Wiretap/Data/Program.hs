@@ -5,8 +5,8 @@ module Wiretap.Data.Program where
 -- information about the program see (Wiretap.Data.Event).
 
 
-newtype Instruction = Instruction { instructionId :: Int } deriving (Show, Eq)
+newtype Instruction = Instruction { instructionId :: Int } deriving (Show, Eq, Ord)
 
 nullInst = Instruction (-1)
 
-newtype Field = Field { fieldId :: Int } deriving (Show, Eq)
+newtype Field = Field { fieldId :: Int } deriving (Show, Eq, Ord)

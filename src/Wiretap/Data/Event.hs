@@ -14,12 +14,12 @@ data Event = Event { thread :: !Thread
                    , operation :: !Operation
                    } deriving (Show, Eq)
 
-newtype Ref = Ref { pointer :: Word32 } deriving (Show, Eq)
+newtype Ref = Ref { pointer :: Word32 } deriving (Show, Eq, Ord)
 
 data Location = Dynamic Ref Program.Field
               | Static Program.Field
               | Array Ref Int
-              deriving (Show, Eq)
+              deriving (Show, Eq, Ord)
 
 data Value = Byte Word8
            | Char Word8
@@ -29,7 +29,7 @@ data Value = Byte Word8
            | Float Word32
            | Double Word64
            | Object Word32
-           deriving (Show, Eq)
+           deriving (Show, Eq, Ord)
 
 data Operation = Acquire Ref
                | Request Ref
