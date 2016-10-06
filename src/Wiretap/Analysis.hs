@@ -9,19 +9,21 @@ import           Control.Monad.State
 import           Control.Monad
 import           Control.Lens hiding ((...))
 
-import           Data.Maybe (maybeToList)
+import           Data.Maybe (maybeToList, catMaybes)
 import           Data.Monoid
 import           Data.Function (on)
 
 import qualified Data.Map as M
 import           Data.Map (Map)
 
+import qualified Data.Vector as V
+
 import qualified Data.IntMap as IM
 import           Data.IntMap (IntMap)
 
 import qualified Data.List as L
 
-import qualified Z3.Base
+import           Z3.Monad
 
 import           Wiretap.Data.Event(Event(..), Operation(..), Thread(..))
 import qualified Wiretap.Data.Event as Event
@@ -85,7 +87,10 @@ orders as bs = And [ a ~> b | a <- as, b <- bs ]
 -- | total, takes a list and create orders so that they the containing events
 -- are total ordered.
 totalOrder :: [EventId] -> Constraint
-totalOrder = And . ap (zipWith $ Order) tail
+totalOrder = And . totalOrder' Order
+
+totalOrder' :: (a -> a -> b) -> [a] -> [b]
+totalOrder' f = ap (zipWith $ f) tail
 
 atThread :: Thread -> a -> IntMap a
 atThread = IM.singleton . threadId
@@ -262,11 +267,15 @@ instance OrderAnalysis RWC where
         where
           allWrites = foldMap (^. rwcWrites) ls
       combine allWrites byValue =
-        And [ Or [ And $ w ~> r :
-                   [ Or [ w' ~> w, r ~> w']
-                   | w' <- allWrites, w' /= w ]
-                 | w <- byValue ^. rwcWrites ]
-            | r <- byValue ^. rwcReads ]
+        if null (byValue ^. rwcWrites)
+        then
+          And []
+        else
+          And [ Or [ And $ w ~> r :
+                    [ Or [ w' ~> w, r ~> w']
+                    | w' <- allWrites, w' /= w ]
+                  | w <- byValue ^. rwcWrites ]
+              | r <- byValue ^. rwcReads ]
 
 
 data Linearize = Linearize
@@ -299,6 +308,44 @@ instance OrderAnalysis Linearize where
                     , toConstraint . _rwc
                     ]
 
+-- Solve constraints
+
+solveLIA :: Z3 a -> IO a
+solveLIA s =
+  evalZ3With (Just QF_LIA) opts s
+  where
+    opts = opt "MODEL" True -- +? opt "MODEL_COMPLETION" True
+
+-- solveConstraint :: Constraint -> IO [EventId]
+-- solveConstraint cs = do
+--   solution <- Z3.evalZ3With (Just Z3.QF_LIA) opts (script cs)
+--   case solution of
+--     Nothing -> error "No solution found"
+--     Just sol -> return sol
+--   where
+--     opts = opt "MODEL" True +? opt "MODEL_COMPLETION" True
+
+-- script :: Constraint -> Z3.Z3 (Maybe [EventId])
+-- script cs = do
+--   script' <- createScript (createScript cs)
+
+toZ3 :: (EventId -> AST) -> Constraint -> Z3 AST
+toZ3 vars (And cs) =
+  mkAnd =<< mapM (toZ3 vars) cs
+toZ3 vars (Or cs) =
+  mkOr =<< mapM (toZ3 vars) cs
+toZ3 vars (Order a b) =
+  mkLt (vars a) (vars b)
+
+
+linearize :: [Event] -> Constraint -> Z3 (Maybe [Integer])
+linearize events c = do
+  vars <- V.replicateM (length events) (mkFreshIntVar "O")
+  assert =<< toZ3 (vars V.!) c
+  astToString =<< toZ3 (vars V.!) c
+
+  fmap snd $ withModel $ \m -> catMaybes <$> mapM (evalInt m) (V.toList vars)
+
 -- Top level analyses
 
 linearizeTotal :: [Event] -> [Event]
@@ -306,5 +353,11 @@ linearizeTotal = id
 
 linearizeTotal' :: [Event] -> IO ()
 linearizeTotal' events = do
-  let linearize = fromEvents events :: Linearize
-  print (toConstraint linearize)
+  let cons = toConstraint (fromEvents events :: Linearize)
+  print cons
+  sol <- solveLIA $ linearize events cons
+  print sol
+  --   events <- solveConstraint $ toConstraint (Order 1 2)
+  --   print events
+  -- where
+  --   linearize = fromEvents events :: Linearize
