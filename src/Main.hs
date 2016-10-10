@@ -27,16 +27,9 @@ Usage:
 
 parse :: String -> FilePath -> IO ()
 parse "log" file = do
-  withFile file ReadMode printLength
-  where
-    printLength h = do
-      events <- parseLog file h
-      forM events $ \event ->
-        print event
-      putStrLn $ "Successfully parsed " ++ show (length events) ++ " events"
+  withFile file ReadMode (\h -> printLength =<< parseLog file h)
 parse fileType file =
   exitWithUsageMessage patterns $ "Unknown file type \"" ++ fileType ++ "\"."
-
 
 linearize :: [FilePath] -> IO ()
 linearize files =
@@ -45,10 +38,14 @@ linearize files =
     parseLogs = sequence . zipWith parseLog files
 
     printAll :: [Event] -> IO ()
-    printAll =  linearizeTotal' -- mapM_ (putStrLn . show)
+    printAll events =
+      either (putStrLn) (printLength) =<< linearizeTotal' events
 
-    printLength events =
-      putStrLn $ "Successfully linearized " ++ show (length events) ++ " events"
+printLength :: [Event] -> IO ()
+printLength events = do
+  forM events $ \event ->
+    print event
+  putStrLn $ "Successfully linearized " ++ show (length events) ++ " events"
 
 
 linearize' :: [[Event]] -> [Event]

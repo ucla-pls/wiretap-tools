@@ -25,6 +25,8 @@ import qualified Data.List as L
 
 import           Z3.Monad
 
+import           Data.PartialOrder
+
 import           Wiretap.Data.Event(Event(..), Operation(..), Thread(..))
 import qualified Wiretap.Data.Event as Event
 
@@ -51,8 +53,22 @@ onAll a = (a <*>) . pure
 
 -- Orders
 
+-- Makes a element unique
+data Unique a = Unique
+  { ident :: Int
+  , cnt :: a
+  } deriving (Show)
+
+instance Eq (Unique a) where
+  (==) = (==) `on` ident
+
+instance Ord (Unique a) where
+  compare = compare `on` ident
+
+type EventIx = Unique Event
+
 data Constraint =
-  Order EventId EventId
+  Order EventIx EventIx
   | And [Constraint]
   | Or [Constraint]
   deriving (Show)
@@ -69,24 +85,22 @@ instance Monoid Constraint where
 infixl 8 ~>
 (~>) = Order
 
-type EventId = Int
-
 class Monoid a => OrderAnalysis a where
-  fromEvent :: EventId -> Event -> a
+  fromEvent :: EventIx -> a
   toConstraint :: a -> Constraint
 
 fromEvents :: OrderAnalysis a => [Event] -> a
 fromEvents =
-  mconcat . L.zipWith fromEvent [0..]
+  mconcat . L.zipWith (fromEvent ... Unique) [0..]
 
 -- | orders, takes two lists and create orders between every event in the first
 -- list and to every event in the second list.
-orders :: [EventId] -> [EventId] -> Constraint
+orders :: [EventIx] -> [EventIx] -> Constraint
 orders as bs = And [ a ~> b | a <- as, b <- bs ]
 
 -- | total, takes a list and create orders so that they the containing events
 -- are total ordered.
-totalOrder :: [EventId] -> Constraint
+totalOrder :: [EventIx] -> Constraint
 totalOrder = And . totalOrder' Order
 
 totalOrder' :: (a -> a -> b) -> [a] -> [b]
@@ -101,10 +115,10 @@ atRef = IM.singleton . (fromIntegral . Event.pointer)
 -- Must Happen Before Analysis
 
 data MhbData = MhbData
-  { _mhbForks  :: [EventId]
-  , _mhbBegins :: [EventId]
-  , _mhbEnds   :: [EventId]
-  , _mhbJoins  :: [EventId]
+  { _mhbForks  :: [EventIx]
+  , _mhbBegins :: [EventIx]
+  , _mhbEnds   :: [EventIx]
+  , _mhbJoins  :: [EventIx]
   } deriving (Show)
 makeLenses ''MhbData
 
@@ -128,13 +142,14 @@ instance Monoid MHB where
   mappend = MHB ... IM.unionWith mappend `on` mhb
 
 instance OrderAnalysis MHB where
-  fromEvent i (Event {thread=t, operation=o}) =
-    MHB $ case o of
-      Begin   -> atThread t  $ withM mhbBegins i
-      End     -> atThread t  $ withM mhbEnds i
-      Fork t' -> atThread t' $ withM mhbForks i
-      Join t' -> atThread t' $ withM mhbJoins i
+  fromEvent ix =
+    MHB $ case operation . cnt $ ix of
+      Begin   -> atThread t  $ withM mhbBegins ix
+      End     -> atThread t  $ withM mhbEnds ix
+      Fork t' -> atThread t' $ withM mhbForks ix
+      Join t' -> atThread t' $ withM mhbJoins ix
       _ -> mempty
+    where t = thread . cnt $ ix
 
   toConstraint =
     foldMap inThread . mhb
@@ -150,7 +165,7 @@ instance OrderAnalysis MHB where
 
 -- Sequential Consistency
 newtype SC = SC
-  { cs :: IntMap [EventId]
+  { cs :: IntMap [EventIx]
   } deriving (Show)
 
 instance Monoid SC where
@@ -159,8 +174,8 @@ instance Monoid SC where
 
 -- Sequential Consistency expects all envents to be represented in order
 instance OrderAnalysis SC where
-  fromEvent i (Event {thread = t}) =
-    SC $ atThread t [i]
+  fromEvent ix =
+    SC $ atThread (thread . cnt $ ix) [ix]
 
   toConstraint = foldMap totalOrder . cs
 
@@ -170,8 +185,8 @@ instance OrderAnalysis SC where
 
 
 data LcType
-  = LcAcquire EventId
-  | LcRelease EventId
+  = LcAcquire EventIx
+  | LcRelease EventIx
   deriving (Show)
 
 newtype LC =
@@ -182,16 +197,16 @@ instance Monoid LC where
   mempty = LC mempty
   mappend = LC ... IM.unionWith (IM.unionWith (<>)) `on` lc
 
-type LcCollector = ([(EventId, EventId)], [EventId])
+type LcCollector = ([(EventIx, EventIx)], [EventIx])
 
 instance OrderAnalysis LC where
-  fromEvent i (Event{operation=o, thread=t}) =
-    LC $ case o of
-      Acquire ref -> append ref $ [LcAcquire i]
-      Release ref -> append ref $ [LcRelease i]
+  fromEvent ix =
+    LC $ case operation . cnt $ ix of
+      Acquire ref -> append ref $ [LcAcquire ix]
+      Release ref -> append ref $ [LcRelease ix]
       _ -> mempty
     where
-      append ref = atRef ref . atThread t
+      append ref = atRef ref . atThread (thread . cnt $ ix)
 
   toConstraint = foldMap byObject . lc
     where
@@ -231,8 +246,8 @@ instance OrderAnalysis LC where
 -- Read Write Consistency
 
 data RwcData = RwcData
-  { _rwcReads :: [EventId]
-  , _rwcWrites :: [EventId]
+  { _rwcReads :: [EventIx]
+  , _rwcWrites :: [EventIx]
   } deriving (Show)
 makeLenses ''RwcData
 
@@ -253,10 +268,10 @@ instance Monoid RWC where
   mappend = RWC ... (M.unionWith (M.unionWith (<>))) `on` rwc
 
 instance OrderAnalysis RWC where
-  fromEvent i Event{operation=o, thread=t} =
-    RWC $ case o of
-       Read l v  -> M.singleton l $ M.singleton v $ withM rwcReads i
-       Write l v -> M.singleton l $ M.singleton v $ withM rwcWrites i
+  fromEvent ix =
+    RWC $ case operation . cnt $ ix of
+       Read l v  -> M.singleton l $ M.singleton v $ withM rwcReads ix
+       Write l v -> M.singleton l $ M.singleton v $ withM rwcWrites ix
        _ -> mempty
 
   toConstraint =
@@ -268,14 +283,15 @@ instance OrderAnalysis RWC where
           allWrites = foldMap (^. rwcWrites) ls
       combine allWrites byValue =
         if null (byValue ^. rwcWrites)
-        then
-          And []
-        else
-          And [ Or [ And $ w ~> r :
-                    [ Or [ w' ~> w, r ~> w']
-                    | w' <- allWrites, w' /= w ]
-                  | w <- byValue ^. rwcWrites ]
-              | r <- byValue ^. rwcReads ]
+        then And []
+        else And
+          [ Or
+            [ And $ w ~> r :
+              [ Or [ w' ~> w, r ~> w']
+              | w' <- allWrites, w' /= w ]
+            | w <- byValue ^. rwcWrites
+            , not $ cnt r !<= cnt w ]
+          | r <- byValue ^. rwcReads ]
 
 
 data Linearize = Linearize
@@ -296,11 +312,11 @@ instance Monoid Linearize where
     where merge f = f a <> f b
 
 instance OrderAnalysis Linearize where
-  fromEvent i e =
+  fromEvent ix =
     Linearize eh eh eh eh
     where
       eh :: OrderAnalysis a => a
-      eh = fromEvent i e
+      eh = fromEvent ix
   toConstraint =
     mconcat . onAll [ toConstraint . _mhb
                     , toConstraint . _sc
@@ -309,27 +325,13 @@ instance OrderAnalysis Linearize where
                     ]
 
 -- Solve constraints
-
 solveLIA :: Z3 a -> IO a
 solveLIA s =
   evalZ3With (Just QF_LIA) opts s
   where
     opts = opt "MODEL" True -- +? opt "MODEL_COMPLETION" True
 
--- solveConstraint :: Constraint -> IO [EventId]
--- solveConstraint cs = do
---   solution <- Z3.evalZ3With (Just Z3.QF_LIA) opts (script cs)
---   case solution of
---     Nothing -> error "No solution found"
---     Just sol -> return sol
---   where
---     opts = opt "MODEL" True +? opt "MODEL_COMPLETION" True
-
--- script :: Constraint -> Z3.Z3 (Maybe [EventId])
--- script cs = do
---   script' <- createScript (createScript cs)
-
-toZ3 :: (EventId -> AST) -> Constraint -> Z3 AST
+toZ3 :: (EventIx -> AST) -> Constraint -> Z3 AST
 toZ3 vars (And cs) =
   mkAnd =<< mapM (toZ3 vars) cs
 toZ3 vars (Or cs) =
@@ -338,26 +340,28 @@ toZ3 vars (Order a b) =
   mkLt (vars a) (vars b)
 
 
-linearize :: [Event] -> Constraint -> Z3 (Maybe [Integer])
+linearize :: [Event] -> Constraint -> Z3 (Maybe [Event])
 linearize events c = do
   vars <- V.replicateM (length events) (mkFreshIntVar "O")
-  assert =<< toZ3 (vars V.!) c
-  astToString =<< toZ3 (vars V.!) c
+  ast <- toZ3 ((V.!) vars . ident) c
+  assert ast
+  astToString ast
 
-  fmap snd $ withModel $ \m -> catMaybes <$> mapM (evalInt m) (V.toList vars)
+  orders <- fmap (join . snd) $ withModel $ getSolution (V.toList vars)
+  case orders of
+    Just solution ->
+      return . Just $ map snd $ L.sort $ zip solution events
+    Nothing -> return Nothing
+
+  where
+    getSolution :: [AST] -> Model -> Z3 (Maybe [Integer])
+    getSolution args m =
+      sequence <$> mapM (evalInt m) args
 
 -- Top level analyses
 
-linearizeTotal :: [Event] -> [Event]
-linearizeTotal = id
-
-linearizeTotal' :: [Event] -> IO ()
+linearizeTotal' :: [Event] -> IO (Either String [Event])
 linearizeTotal' events = do
   let cons = toConstraint (fromEvents events :: Linearize)
-  print cons
   sol <- solveLIA $ linearize events cons
-  print sol
-  --   events <- solveConstraint $ toConstraint (Order 1 2)
-  --   print events
-  -- where
-  --   linearize = fromEvents events :: Linearize
+  return $ maybe (Left "Something went wrong") Right sol
