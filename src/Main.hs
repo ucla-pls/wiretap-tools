@@ -11,46 +11,45 @@ import           System.Console.Docopt
 import qualified Data.List as L
 import           Control.Monad
 
+import qualified Data.ByteString.Lazy as BL
+
 import           Wiretap.Data.Event
 import           Wiretap.Format.Binary
-import           Wiretap.Analysis(linearizeTotal', linearizeTotal)
+import           Wiretap.Analysis(linearizeTotal')
+
+-- import           Wiretap.Analysis.Count
 
 
 patterns :: Docopt
 patterns = [docopt|wiretap-tools version 0.1.0.0
 
 Usage:
-   wiretap-tools parse [--type TYPE] <file>
-   wiretap-tools linearize <folder>
+   wiretap-tools parse <logs>
+   wiretap-tools linearize <logs>
+   wiretap-tools count <logs>
+   wiretap-tools size <logs>
    wiretap-tools (-h | --help | --version)
 |]
 
-parse :: String -> FilePath -> IO ()
-parse "log" file = do
-  withFile file ReadMode (\h -> printLength =<< parseLog file h)
-parse fileType file =
-  exitWithUsageMessage patterns $ "Unknown file type \"" ++ fileType ++ "\"."
+parse :: [FilePath] -> IO ()
+parse files = do
+  withLogs files $ \traces -> do
+    forM_ traces $ \(f,t) ->
+      printAll t
 
 linearize :: [FilePath] -> IO ()
 linearize files =
-  withFiles files ReadMode $ (printAll . linearize' =<<) . parseLogs
-  where
-    parseLogs = sequence . zipWith parseLog files
+  withLogs files $ \traces -> do
+     events <- linearizeTotal' (concatMap snd traces)
+     case events of
+       Left error -> putStrLn error
+       Right events -> printAll events
 
-    printAll :: [Event] -> IO ()
-    printAll events =
-      either (putStrLn) (printLength) =<< linearizeTotal' events
-
-printLength :: [Event] -> IO ()
-printLength events = do
-  forM events $ \event ->
-    print event
-  putStrLn $ "Successfully linearized " ++ show (length events) ++ " events"
-
-
-linearize' :: [[Event]] -> [Event]
-linearize' = linearizeTotal . L.concat
-
+count = undefined
+-- count :: [FilePath] -> IO ()
+-- count files =
+--   withLogs files $ \traces -> do
+--     forM_ traces (print . countEvents)
 
 main :: IO ()
 main = do
@@ -63,20 +62,43 @@ main = do
     exitWithUsage patterns
 
   onCommand "parse" $ do
-    file <- args `getArgOrExit` argument "file"
-    let fileType = getArgWithDefault args
-                     (tail $ takeExtension file)
-                     (longOption "type")
-    parse fileType file
+    logs <- getLogFiles args
+    parse logs
 
   onCommand "linearize" $ do
-    folder <- args `getArgOrExit` argument "folder"
-    logs <- filter (L.isSuffixOf ".log") <$> getDirectoryContents folder
-    linearize $ map (folder </>) logs
+    logs <- getLogFiles args
+    linearize logs
 
-  where
-    getArgOrExit = getArgOrExitWith patterns
+  onCommand "count" $ do
+    logs <- getLogFiles args
+    count logs
 
+  onCommand "size" $ do
+    logs <- getLogFiles args
+    withLogs logs $ \traces ->
+      forM_ traces $ \(f, t) ->
+        putStrLn $ f ++ ": " ++ show (length t)
+
+withLogs :: [FilePath] -> ([(FilePath, [Event])] -> IO a) -> IO a
+withLogs files f =
+  withFiles files ReadMode (\hs -> parseLogs files hs >>= f . zip files)
+
+parseLogs :: [FilePath] -> [Handle] -> IO [[Event]]
+parseLogs = sequence ... zipWith parseLog
+
+
+getArgOrExit :: Arguments -> Option -> IO String
+getArgOrExit = getArgOrExitWith patterns
+
+getLogFiles :: Arguments -> IO [FilePath]
+getLogFiles args = do
+  logfolder <- args `getArgOrExit` argument "logs"
+  isFolder <- doesDirectoryExist logfolder
+  if isFolder
+    then do
+      logs <- filter (L.isSuffixOf ".log") <$> listDirectory logfolder
+      return $ map (logfolder </>) logs
+    else return [logfolder]
 
 parseThread =
   Thread . read . takeBaseName
@@ -93,3 +115,20 @@ withFiles files mode f =
     withFiles' (file:rest) handles =
       withFile file mode $ \h ->
         withFiles' rest (h:handles)
+
+
+printLength :: [Event] -> IO ()
+printLength events = do
+  putStrLn $ "Successfully worked with " ++ show (length events) ++ " events"
+
+
+printAll :: [Event] -> IO ()
+printAll events = do
+  count <- foldM printAndCount 0 events
+  putStrLn $ "Successfully linearized " ++ show count ++ " events"
+
+
+printAndCount :: Show a => Int -> a -> IO Int
+printAndCount acc a = do
+  print a
+  return (acc + 1)

@@ -2,6 +2,8 @@ module Wiretap.Format.Binary where
 
 import System.IO
 
+import GHC.Int (Int64)
+
 import qualified Data.ByteString.Lazy as BL
 
 import Data.Binary.Get
@@ -17,17 +19,42 @@ import Wiretap.Data.Program
 readEvents :: Thread -> Handle -> IO [Event]
 readEvents t handle = do
   bytes <- BL.hGetContents handle
-  return . ((Event t 0 nullInst Begin):) $ runGet (getEvents t 1) bytes
+  return $ (Event t 0 nullInst Begin): getEvents t 1 bytes
 
-getEvents :: Thread -> Int -> Get [Event]
-getEvents t i = do
-  empty <- isEmpty
-  if empty
-    then return [ Event t i nullInst End ]
-    else do
-      event <- getEvent t i
-      rest <- getEvents t (i + 1)
-      return (event : rest)
+getEvents :: Thread -> Int -> BL.ByteString -> [Event]
+getEvents t i bytes =
+  if BL.null bytes
+  then [Event t i nullInst End]
+  else
+    let size = eventSize . BL.head $ bytes
+        (eventData, rest) = BL.splitAt size bytes
+    in readEvent t i eventData : getEvents t (i + 1) rest
+
+eventSize :: Word8 -> Int64
+eventSize w =
+  1 + 4 +
+  case w .&. 0x0f of
+    6 -> 8 + valueSize w
+    7 -> 8 + valueSize w
+    8 -> 0; 9 -> 0
+    _ -> 4
+
+  where
+    valueSize w =
+      case (w .&. 0xf0) `shiftR` 4 of
+        0 -> 1
+        1 -> 1
+        2 -> 2
+        3 -> 4
+        4 -> 8
+        5 -> 4
+        6 -> 8
+        7 -> 4
+        a -> error $ "Problem in valueSize: " ++ show a
+
+readEvent :: Thread -> Int -> BL.ByteString -> Event
+readEvent t i bytes =
+  runGet (getEvent t i) bytes
 
 getEvent :: Thread -> Int -> Get Event
 getEvent t i = do
@@ -58,7 +85,10 @@ getEvent t i = do
       newEvent ... Write <$> getLocation <*> getValue operation
 
     a ->
-      error $ "Problem in getEvent: " ++ show a ++ " from: " ++ show operation ++ " inst: " ++ show instruction
+      error $ "Problem in getEvent: "
+               ++ show a ++ " from: "
+               ++ show operation ++ " inst: "
+               ++ show instruction
 
   where
     getThread =
