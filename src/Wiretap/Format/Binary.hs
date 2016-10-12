@@ -6,6 +6,9 @@ import GHC.Int (Int64)
 
 import qualified Data.ByteString.Lazy as BL
 
+import qualified Data.Vector.Unboxed as V
+import qualified Data.List as L
+
 import Data.Binary.Get
 import Data.Word
 import Data.Bits
@@ -14,7 +17,8 @@ import Wiretap.Data.Event
 import Wiretap.Data.Program
 
 -- Read the binary format.
-(...) = (.) . (.)
+-- (...) = (.) . (.)
+-- {-# INLINE (...) #-}
 
 readEvents :: Thread -> Handle -> IO [Event]
 readEvents t handle = do
@@ -23,23 +27,27 @@ readEvents t handle = do
 
 getEvents :: Thread -> Int -> BL.ByteString -> [Event]
 getEvents t i bytes =
-  if BL.null bytes
-  then [Event t i nullInst End]
-  else
-    let size = eventSize . BL.head $ bytes
-        (eventData, rest) = BL.splitAt size bytes
-    in readEvent t i eventData : getEvents t (i + 1) rest
+  case BL.uncons bytes of
+    Just (w, o) ->
+      let (eventData, rest) = BL.splitAt (size w) o in
+      readEvent t i w eventData : getEvents t (i + 1) rest
+    Nothing -> [Event t i nullInst End]
+  where
+    size = eventSize -- V.unsafeIndex sizes . fromIntegral
+
+sizes :: V.Vector Int64
+sizes = V.fromList $ L.map eventSize [ 0 .. 255 ]
+
 
 eventSize :: Word8 -> Int64
 eventSize w =
-  1 + 4 +
-  case w .&. 0x0f of
-    6 -> 8 + valueSize w
-    7 -> 8 + valueSize w
-    8 -> 0; 9 -> 0
-    _ -> 4
-
+  4 + case w .&. 0x0f of
+        6 -> 8 + valueSize w
+        7 -> 8 + valueSize w
+        8 -> 0; 9 -> 0
+        _ -> 4
   where
+    {-# INLINE valueSize #-}
     valueSize w =
       case (w .&. 0xf0) `shiftR` 4 of
         0 -> 1
@@ -50,45 +58,52 @@ eventSize w =
         5 -> 4
         6 -> 8
         7 -> 4
-        a -> error $ "Problem in valueSize: " ++ show a
+        a -> 0
 
-readEvent :: Thread -> Int -> BL.ByteString -> Event
-readEvent t i bytes =
-  runGet (getEvent t i) bytes
+readEvent :: Thread -> Int -> Word8 -> BL.ByteString -> Event
+readEvent t i w bytes =
+  Event
+    { thread = t
+    , order = i
+    , operation = readOperation w oper
+    , instruction = runGet (getInstruction) inst
+    }
+  where
+    (inst, oper) = BL.splitAt 4 bytes
+    getInstruction =
+      Instruction . fromIntegral <$> getWord32be
 
-getEvent :: Thread -> Int -> Get Event
-getEvent t i = do
-  operation <- getWord8
-  instruction <- getInstruction
-  let newEvent = Event t i instruction
-  case operation .&. 0x0f of
+readOperation :: Word8 -> BL.ByteString -> Operation
+readOperation w bytes =
+  case w .&. 0x0f of
 
     1 -> -- Fork
-      newEvent . Fork <$> getThread
+      Fork $ runGet getThread bytes
 
     2 -> -- Join
-      newEvent . Join <$> getThread
+      Join $ runGet getThread bytes
 
     3 -> -- Request
-      newEvent . Request <$> getRef
+      Request $ runGet getRef bytes
 
     4 -> -- Acquire
-      newEvent . Acquire <$> getRef
+      Acquire $ runGet getRef bytes
 
     5 -> -- Release
-      newEvent . Release <$> getRef
+      Release $ runGet getRef bytes
 
     6 -> -- Read
-      newEvent ... Read <$> getLocation <*> getValue operation
+      let (locs, rest) = BL.splitAt 8 bytes in
+      Read (runGet getLocation locs) (runGet (getValue w) rest)
 
     7 -> -- Write
-      newEvent ... Write <$> getLocation <*> getValue operation
+      let (locs, rest) = BL.splitAt 8 bytes in
+      Write (runGet getLocation locs) (runGet (getValue w) rest)
 
     a ->
-      error $ "Problem in getEvent: "
+      error $ "Problem in getOperation: "
                ++ show a ++ " from: "
-               ++ show operation ++ " inst: "
-               ++ show instruction
+               ++ show w
 
   where
     getThread =
@@ -99,9 +114,6 @@ getEvent t i = do
 
     getField =
       Field . fromIntegral <$> getWord32be
-
-    getInstruction =
-      Instruction . fromIntegral <$> getWord32be
 
     getLocation = do
       object <- getRef

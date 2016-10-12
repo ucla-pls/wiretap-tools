@@ -11,10 +11,10 @@ import qualified Wiretap.Data.Program as Program
 newtype Thread = Thread { threadId :: Int } deriving (Show, Eq, Ord)
 
 data Event = Event
-  { thread :: !Thread
-  , order :: !Int
-  , instruction :: !Program.Instruction
-  , operation :: !Operation
+  { thread :: Thread
+  , order :: Int
+  , instruction :: Program.Instruction
+  , operation :: Operation
   } deriving (Show, Eq, Ord)
 
 instance PartialOrder Event where

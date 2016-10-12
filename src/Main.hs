@@ -17,8 +17,11 @@ import           Wiretap.Data.Event
 import           Wiretap.Format.Binary
 import           Wiretap.Analysis(linearizeTotal')
 
--- import           Wiretap.Analysis.Count
+import           Wiretap.Analysis.Count
 
+
+(...) = (.) . (.)
+{-# INLINE (...) #-}
 
 patterns :: Docopt
 patterns = [docopt|wiretap-tools version 0.1.0.0
@@ -45,11 +48,14 @@ linearize files =
        Left error -> putStrLn error
        Right events -> printAll events
 
-count = undefined
--- count :: [FilePath] -> IO ()
--- count files =
---   withLogs files $ \traces -> do
---     forM_ traces (print . countEvents)
+count :: [FilePath] -> IO ()
+count files =
+  withLogs files $ \traces -> do
+    let table = map mkRow traces
+    putStrLn . L.intercalate "," $ "file" : counterHeader
+    forM_ table $ \row ->
+      putStrLn $ L.intercalate "," row
+  where mkRow (f, t) =  f : counterToRow (countEvents t)
 
 main :: IO ()
 main = do
