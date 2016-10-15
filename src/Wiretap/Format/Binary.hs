@@ -1,6 +1,7 @@
 module Wiretap.Format.Binary where
 
 import System.IO
+import Debug.Trace
 
 import GHC.Int (Int64)
 
@@ -27,81 +28,62 @@ readEvents t handle = do
 
 getEvents :: Thread -> Int -> BL.ByteString -> [Event]
 getEvents t i bytes =
-  case BL.uncons bytes of
-    Just (w, o) ->
-      let (eventData, rest) = BL.splitAt (size w) o in
-      readEvent t i w eventData : getEvents t (i + 1) rest
+  case readEvent t i bytes of
+    Just (event, rest) -> event : getEvents t (i + 1) rest
     Nothing -> [Event t i nullInst End]
   where
-    size = eventSize -- V.unsafeIndex sizes . fromIntegral
-
-sizes :: V.Vector Int64
-sizes = V.fromList $ L.map eventSize [ 0 .. 255 ]
 
 
-eventSize :: Word8 -> Int64
-eventSize w =
-  4 + case w .&. 0x0f of
-        6 -> 8 + valueSize w
-        7 -> 8 + valueSize w
-        8 -> 0; 9 -> 0
-        _ -> 4
+valueSize :: Word8 -> Int64
+valueSize w =
+  case (w .&. 0xf0) `shiftR` 4 of
+    0 -> 1
+    1 -> 1
+    2 -> 2
+    3 -> 4
+    4 -> 8
+    5 -> 4
+    6 -> 8
+    7 -> 4
+    a -> error $ "Bad event value " ++ show a
+{-# INLINE valueSize #-}
+
+readEvent :: Thread -> Int -> BL.ByteString -> Maybe (Event, BL.ByteString)
+readEvent t i bytes =
+  case BL.uncons bytes of
+    Just (w, rest) ->
+      let (inst, rest') = readInstruction rest
+          (opr, rest'') = readOperation w rest'
+      in Just (Event t i inst opr, rest'')
+    Nothing -> Nothing
   where
-    {-# INLINE valueSize #-}
-    valueSize w =
-      case (w .&. 0xf0) `shiftR` 4 of
-        0 -> 1
-        1 -> 1
-        2 -> 2
-        3 -> 4
-        4 -> 8
-        5 -> 4
-        6 -> 8
-        7 -> 4
-        a -> 0
 
-readEvent :: Thread -> Int -> Word8 -> BL.ByteString -> Event
-readEvent t i w bytes =
-  Event
-    { thread = t
-    , order = i
-    , operation = readOperation w oper
-    , instruction = runGet (getInstruction) inst
-    }
-  where
-    (inst, oper) = BL.splitAt 4 bytes
-    getInstruction =
-      Instruction . fromIntegral <$> getWord32be
+readInstruction :: BL.ByteString -> (Instruction, BL.ByteString)
+readInstruction =
+  readGet 4 $ Instruction <$> fromIntegral <$> getWord32be
+{-# INLINE readInstruction #-}
 
-readOperation :: Word8 -> BL.ByteString -> Operation
-readOperation w bytes =
+readOperation :: Word8 -> BL.ByteString -> (Operation, BL.ByteString)
+readOperation w =
   case w .&. 0x0f of
-
-    1 -> -- Fork
-      Fork $ runGet getThread bytes
-
-    2 -> -- Join
-      Join $ runGet getThread bytes
-
-    3 -> -- Request
-      Request $ runGet getRef bytes
-
-    4 -> -- Acquire
-      Acquire $ runGet getRef bytes
-
-    5 -> -- Release
-      Release $ runGet getRef bytes
-
+    0 -> readN 4 $ Synch . runGet (fromIntegral <$> getWord32be)
+    1 -> readN 4 $ Fork . runGet getThread
+    2 -> readN 4 $ Join . runGet getThread
+    3 -> readN 4 $ Request . runGet getRef
+    4 -> readN 4 $ Acquire . runGet getRef
+    5 -> readN 4 $ Release . runGet getRef
     6 -> -- Read
-      let (locs, rest) = BL.splitAt 8 bytes in
-      Read (runGet getLocation locs) (runGet (getValue w) rest)
+      readN (valueSize w + 8) $ \bytes ->
+        let (locs, rest) = BL.splitAt 8 bytes in
+        Read (runGet getLocation locs) (runGet (getValue w) rest)
 
     7 -> -- Write
-      let (locs, rest) = BL.splitAt 8 bytes in
-      Write (runGet getLocation locs) (runGet (getValue w) rest)
+      readN (valueSize w + 8) $ \bytes ->
+        let (locs, rest) = BL.splitAt 8 bytes in
+        Write (runGet getLocation locs) (runGet (getValue w) rest)
 
     a ->
-      error $ "Problem in getOperation: "
+      error $ "Problem in readOperation: "
                ++ show a ++ " from: "
                ++ show w
 
@@ -142,3 +124,19 @@ readOperation w bytes =
           Object <$> getWord32be
         a ->
           error $ "Problem in getValue: " ++ show a
+{-# INLINE readOperation #-}
+
+onfst :: (a -> b) -> (a, c) -> (b, c)
+onfst f (a, b) =
+  (f a, b)
+{-# INLINE onfst #-}
+
+readN :: Int64 -> (BL.ByteString -> a) -> BL.ByteString -> (a, BL.ByteString)
+readN i f =
+  onfst f . BL.splitAt i
+{-# INLINE readN #-}
+
+readGet :: Int64 -> (Get a) -> BL.ByteString -> (a, BL.ByteString)
+readGet i =
+  readN i . runGet
+{-# INLINE readGet #-}

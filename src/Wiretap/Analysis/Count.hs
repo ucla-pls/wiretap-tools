@@ -13,7 +13,8 @@ import Prelude hiding (reads)
 -- | Counter, counts all the occurrences of each event.
 
 data Counter = Counter
-  { acquires :: !Int
+  { synchs   :: !Int
+  , acquires :: !Int
   , requests :: !Int
   , releases :: !Int
   , forks    :: !Int
@@ -25,9 +26,10 @@ data Counter = Counter
   } deriving (Show)
 
 instance Monoid Counter where
-  mempty = Counter 0 0 0 0 0 0 0 0 0
+  mempty = Counter 0 0 0 0 0 0 0 0 0 0
   mappend a b = Counter
-    { acquires = sum acquires
+    { synchs   = sum synchs
+    , acquires = sum acquires
     , requests = sum requests
     , releases = sum releases
     , forks    = sum forks
@@ -44,6 +46,7 @@ instance Monoid Counter where
 fromEvent :: Event -> Counter
 fromEvent Event {operation=o} =
   case o of
+   Synch _   -> mempty { synchs = 1 }
    Acquire _ -> mempty { acquires = 1 }
    Request _ -> mempty { requests = 1 }
    Release _ -> mempty { releases = 1 }
@@ -57,18 +60,20 @@ fromEvent Event {operation=o} =
 incrCounter :: Counter -> Event -> Counter
 incrCounter c Event {operation=o} =
   case o of
+   Synch _   -> c { synchs   = synchs c + 1 }
    Acquire _ -> c { acquires = acquires c + 1 }
    Request _ -> c { requests = requests c + 1 }
    Release _ -> c { releases = releases c + 1 }
-   Fork _    -> c { forks = forks c + 1 }
-   Join _    -> c { joins = joins c + 1 }
-   Read _ _  -> c { reads = reads c + 1 }
-   Write _ _ -> c { writes = writes c + 1 }
-   Begin     -> c { begins = begins c + 1 }
-   End       -> c { ends = ends c + 1 }
+   Fork _    -> c { forks    = forks c + 1 }
+   Join _    -> c { joins    = joins c + 1 }
+   Read _ _  -> c { reads    = reads c + 1 }
+   Write _ _ -> c { writes   = writes c + 1 }
+   Begin     -> c { begins   = begins c + 1 }
+   End       -> c { ends     = ends c + 1 }
 
 printCounter :: Counter -> IO ()
 printCounter c = do
+  printf "synchs   = %d\n" $ synchs c
   printf "acquires = %d\n" $ acquires c
   printf "requests = %d\n" $ requests c
   printf "releases = %d\n" $ releases c
@@ -82,7 +87,8 @@ printCounter c = do
 
 counterHeader :: [String]
 counterHeader =
-  [ "acquires"
+  [ "synchs"
+  , "acquires"
   , "requests"
   , "releases"
   , "forks"
@@ -90,12 +96,14 @@ counterHeader =
   , "reads"
   , "writes"
   , "begins"
-  , "ends" ]
+  , "ends"
+  ]
 
 counterToRow :: Counter -> [String]
 counterToRow c =
   fmap show $
-    [ acquires
+    [ synchs
+    , acquires
     , requests
     , releases
     , forks
@@ -103,7 +111,8 @@ counterToRow c =
     , reads
     , writes
     , begins
-    , ends] <*> [c]
+    , ends
+    ] <*> [c]
 
 
 countEvents :: [Event] -> Counter

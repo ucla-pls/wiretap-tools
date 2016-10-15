@@ -34,6 +34,7 @@ executable wiretap-tools
   ghc-options:
     -O2
     -threaded
-    -fprof-auto
-    "-with-rtsopts= -s -i0.1 -hd -p -K100M"
+  --  -fprof-auto
+  --  -funbox-strict-fields
+  --  "-with-rtsopts= -s -i0.1 -hd -p -K100M"
   default-language:    Haskell2010

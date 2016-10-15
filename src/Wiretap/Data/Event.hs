@@ -45,7 +45,8 @@ data Value
   deriving (Show, Eq, Ord)
 
 data Operation
-  = Acquire Ref
+  = Synch Int
+  | Acquire Ref
   | Request Ref
   | Release Ref
 
