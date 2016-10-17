@@ -1,1 +1,7 @@
 dist/
+.DS_Store
+*.aux
+*.hp
+*.prof
+test/
+*.ps
