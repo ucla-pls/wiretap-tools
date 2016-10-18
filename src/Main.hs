@@ -92,6 +92,9 @@ withLogs files f =
 parseLogs :: [FilePath] -> [Handle] -> IO [[Event]]
 parseLogs = sequence ... zipWith parseLog
 
+parseLog :: FilePath -> Handle -> IO [Event]
+parseLog log h =
+  readEvents (parseThread log) h
 
 getArgOrExit :: Arguments -> Option -> IO String
 getArgOrExit = getArgOrExitWith patterns
@@ -109,9 +112,6 @@ getLogFiles args = do
 parseThread =
   Thread . read . takeBaseName
 
-parseLog :: FilePath -> Handle -> IO [Event]
-parseLog log h =
-  readEvents (parseThread log) h
 
 withFiles :: [FilePath] -> IOMode -> ([Handle] -> IO a) -> IO a
 withFiles files mode f =

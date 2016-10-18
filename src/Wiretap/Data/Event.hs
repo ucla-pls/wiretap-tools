@@ -28,20 +28,20 @@ newtype Ref = Ref
   deriving (Show, Eq, Ord)
 
 data Location
-  = Dynamic Ref Program.Field
-  | Static Program.Field
-  | Array Ref Int
+  = Dynamic !Ref !Program.Field
+  | Static !Program.Field
+  | Array !Ref !Int
   deriving (Show, Eq, Ord)
 
 data Value
-  = Byte Word8
-  | Char Word8
-  | Short Word16
-  | Integer Word32
-  | Long Word64
-  | Float Word32
-  | Double Word64
-  | Object Word32
+  = Byte !Word8
+  | Char !Word8
+  | Short !Word16
+  | Integer !Word32
+  | Long !Word64
+  | Float !Word32
+  | Double !Word64
+  | Object !Word32
   deriving (Show, Eq, Ord)
 
 data Operation

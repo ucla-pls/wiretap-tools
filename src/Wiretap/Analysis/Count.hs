@@ -6,7 +6,7 @@ module Wiretap.Analysis.Count
   ) where
 
 import Text.Printf
-import qualified Data.List as L
+import qualified Data.Foldable as F
 import Wiretap.Data.Event
 import Prelude hiding (reads)
 
@@ -115,5 +115,5 @@ counterToRow c =
     ] <*> [c]
 
 
-countEvents :: [Event] -> Counter
-countEvents = L.foldl' incrCounter mempty
+countEvents :: Foldable f => f Event -> Counter
+countEvents = F.foldl' incrCounter mempty

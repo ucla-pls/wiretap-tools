@@ -1,4 +1,4 @@
-module Wiretap.Format.Binary where
+module Wiretap.Format.Binary (readEvents, readHistoryEvents) where
 
 import System.IO
 import Debug.Trace
@@ -7,9 +7,6 @@ import GHC.Int (Int64)
 
 import qualified Data.ByteString.Lazy as BL
 
-import qualified Data.Vector.Unboxed as V
-import qualified Data.List as L
-
 import Data.Binary.Get
 import Data.Word
 import Data.Bits
@@ -17,36 +14,21 @@ import Data.Bits
 import Wiretap.Data.Event
 import Wiretap.Data.Program
 
--- Read the binary format.
--- (...) = (.) . (.)
--- {-# INLINE (...) #-}
-
 readEvents :: Thread -> Handle -> IO [Event]
 readEvents t handle = do
   bytes <- BL.hGetContents handle
   return $ (Event t 0 nullInst Begin): getEvents t 1 bytes
+
+readHistoryEvents :: Handle -> IO [Event]
+readHistoryEvents handle = do
+  bytes <- BL.hGetContents handle
+  return $ getHistoryEvents bytes
 
 getEvents :: Thread -> Int -> BL.ByteString -> [Event]
 getEvents t i bytes =
   case readEvent t i bytes of
     Just (event, rest) -> event : getEvents t (i + 1) rest
     Nothing -> [Event t i nullInst End]
-  where
-
-
-valueSize :: Word8 -> Int64
-valueSize w =
-  case (w .&. 0xf0) `shiftR` 4 of
-    0 -> 1
-    1 -> 1
-    2 -> 2
-    3 -> 4
-    4 -> 8
-    5 -> 4
-    6 -> 8
-    7 -> 4
-    a -> error $ "Bad event value " ++ show a
-{-# INLINE valueSize #-}
 
 readEvent :: Thread -> Int -> BL.ByteString -> Maybe (Event, BL.ByteString)
 readEvent t i bytes =
@@ -56,7 +38,28 @@ readEvent t i bytes =
           (opr, rest'') = readOperation w rest'
       in Just (Event t i inst opr, rest'')
     Nothing -> Nothing
-  where
+{-# INLINE readEvent #-}
+
+getHistoryEvents :: BL.ByteString -> [Event]
+getHistoryEvents bytes =
+  case readHistoryEvent bytes of
+    Just (event, rest) -> event : getHistoryEvents rest
+    Nothing -> []
+
+readHistoryEvent :: BL.ByteString -> Maybe (Event, BL.ByteString)
+readHistoryEvent bytes =
+  if BL.null bytes
+  then Nothing
+  else
+    let (t, bytes')  = readGet 4 getThread bytes in
+    let (i, bytes'') = readGet 4 (fromIntegral <$> getWord32be) bytes' in
+    case BL.uncons bytes'' of
+      Just (w, rest) ->
+        let (inst, rest') = readInstruction rest
+            (opr, rest'') = readOperation w rest'
+        in Just (Event t i inst opr, rest'')
+      Nothing -> error "Unexpected end of file"
+{-# INLINE readHistoryEvent #-}
 
 readInstruction :: BL.ByteString -> (Instruction, BL.ByteString)
 readInstruction =
@@ -88,9 +91,6 @@ readOperation w =
                ++ show w
 
   where
-    getThread =
-      Thread . fromIntegral <$> getWord32be
-
     getRef =
       Ref <$> getWord32be
 
@@ -126,6 +126,11 @@ readOperation w =
           error $ "Problem in getValue: " ++ show a
 {-# INLINE readOperation #-}
 
+getThread :: Get Thread
+getThread =
+  Thread . fromIntegral <$> getWord32be
+{-# INLINE getThread #-}
+
 onfst :: (a -> b) -> (a, c) -> (b, c)
 onfst f (a, b) =
   (f a, b)
@@ -140,3 +145,17 @@ readGet :: Int64 -> (Get a) -> BL.ByteString -> (a, BL.ByteString)
 readGet i =
   readN i . runGet
 {-# INLINE readGet #-}
+
+valueSize :: Word8 -> Int64
+valueSize w =
+  case (w .&. 0xf0) `shiftR` 4 of
+    0 -> 1
+    1 -> 1
+    2 -> 2
+    3 -> 4
+    4 -> 8
+    5 -> 4
+    6 -> 8
+    7 -> 4
+    a -> error $ "Bad event value " ++ show a
+{-# INLINE valueSize #-}
