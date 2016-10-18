@@ -30,6 +30,9 @@ executable wiretap-tools
                      , z3 >= 4.1.0
                      , lens >= 4.14
                      , vector
+                     , pipes
+                     , pipes-bytestring
+                     , QuickCheck >= 2.8
   hs-source-dirs:      src
   ghc-options:
     -O2
@@ -55,6 +58,9 @@ benchmark wt-prof
                      , z3 >= 4.1.0
                      , lens >= 4.14
                      , vector
+                     , pipes
+                     , pipes-bytestring
+                     , QuickCheck >= 2.8
   hs-source-dirs:      src
   ghc-options:
     -O2

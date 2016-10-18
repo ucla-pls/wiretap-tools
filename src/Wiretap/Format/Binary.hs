@@ -1,6 +1,7 @@
 module Wiretap.Format.Binary (readEvents, readHistoryEvents) where
 
 import System.IO
+import           System.FilePath
 import Debug.Trace
 
 import GHC.Int (Int64)
@@ -13,6 +14,42 @@ import Data.Bits
 
 import Wiretap.Data.Event
 import Wiretap.Data.Program
+
+import Pipes
+import Pipes.ByteString
+import Pipes.Binary
+
+readLog' :: FilePath -> IO ()
+readLog' fp =
+  withFile fp ReadMode $ \handle ->
+    runEffect $ readLog (parseThread fp) handle >-> printAll
+
+  where
+    parseThread =
+      Thread . read . takeBaseName
+
+printAll :: Consumer Event IO ()
+printAll = do
+  event <- await
+  lift $ print event
+  printAll
+
+readLog :: Thread -> Handle -> Producer Event IO ()
+readLog t handle =
+  fromHandle handle >-> logEvents t
+
+logEvents :: Monad m => Thread -> Pipe ByteString Event m ()
+logEvents t =
+  yield $ Event t 0 nullInst Begin
+  logEvents' t 1
+
+logEvents' :: Monad m => Thread -> Int -> Pipe ByteString Event m ()
+logEvents' t i = do
+  byte <- drawByte
+  case byte of
+    Just w -> return ()
+    Nothing ->
+      yield $ Event t i nullInst End
 
 readEvents :: Thread -> Handle -> IO [Event]
 readEvents t handle = do
@@ -42,23 +79,22 @@ readEvent t i bytes =
 
 getHistoryEvents :: BL.ByteString -> [Event]
 getHistoryEvents bytes =
-  case readHistoryEvent bytes of
-    Just (event, rest) -> event : getHistoryEvents rest
-    Nothing -> []
-
-readHistoryEvent :: BL.ByteString -> Maybe (Event, BL.ByteString)
-readHistoryEvent bytes =
   if BL.null bytes
-  then Nothing
+  then []
   else
-    let (t, bytes')  = readGet 4 getThread bytes in
-    let (i, bytes'') = readGet 4 (fromIntegral <$> getWord32be) bytes' in
-    case BL.uncons bytes'' of
-      Just (w, rest) ->
-        let (inst, rest') = readInstruction rest
-            (opr, rest'') = readOperation w rest'
-        in Just (Event t i inst opr, rest'')
-      Nothing -> error "Unexpected end of file"
+    let (event, rest) = readHistoryEvent bytes in
+    event : getHistoryEvents rest
+
+readHistoryEvent :: BL.ByteString -> (Event, BL.ByteString)
+readHistoryEvent bytes =
+  let (t, bytes')  = readGet 4 getThread bytes in
+  let (i, bytes'') = readGet 4 (fromIntegral <$> getWord32be) bytes' in
+  case BL.uncons bytes'' of
+    Just (w, rest) ->
+      let (inst, rest') = readInstruction rest
+          (opr, rest'') = readOperation w rest'
+      in (Event t i inst opr, rest'')
+    Nothing -> error "Unexpected end of file"
 {-# INLINE readHistoryEvent #-}
 
 readInstruction :: BL.ByteString -> (Instruction, BL.ByteString)
