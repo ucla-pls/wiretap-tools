@@ -32,7 +32,7 @@ instance Arbitrary Thread where
 prop_ThreadIsBinary = prop_isBinary :: Thread -> Bool
 
 data Event = Event
-  { operation :: Operation
+  { operation :: !Operation
   , thread    :: !Thread
   , order     :: !Int32
   } deriving (Show, Eq, Ord)
@@ -42,6 +42,7 @@ instance PartialOrder Event where
     Just $ on compare order a b
   cmp a b =
     Nothing
+
 
 instance Binary Event where
   put (Event opr t o) = do
@@ -99,7 +100,7 @@ instance Binary Location where
   put (Array r i) = put r >> put i
   put (Static i) = putInt32be 0 >> put i
   put (Dynamic r i) = put r >> putInt32be (Program.fieldId i)
-  get = do
+  get = {-# SCC get_location #-} do
     r <- get
     i <- getInt32be
     if pointer r == 0
@@ -172,6 +173,7 @@ getValueId = fromIntegral . fromEnum . valueType
 
 getValue :: Word8 -> Get Value
 getValue w =
+  {-# SCC get_value #-}
   case getValueType w of
     VByte    -> Byte <$> get
     VChar    -> Char <$> get
@@ -254,19 +256,48 @@ instance Binary Operation where
     End ->
       putWord8 9
 
-  get = do
+  get = {-# SCC get_operation #-} do
     w <- getWord8
-    case w .&. 0x0f of
-      0 -> Synch <$> getInt32be
-      1 -> Fork <$> get
-      2 -> Join <$> get
-      3 -> Request <$> get
-      4 -> Acquire <$> get
-      5 -> Release <$> get
-      6 -> Read <$> get <*> getValue w
-      7 -> Write <$> get <*> getValue w
-      8 -> return Begin
-      9 -> return End
+    innerGet w
+    -- bs <- getLazyByteString (eventSize w)
+    -- return $ runGet (innerGet w) bs
+
+    where
+      innerGet w =
+        case w .&. 0x0f of
+          0 -> Synch <$> getInt32be
+          1 -> Fork <$> get
+          2 -> Join <$> get
+          3 -> Request <$> get
+          4 -> Acquire <$> get
+          5 -> Release <$> get
+          6 -> {-# SCC get_operation_read #-} (Read <$> get <*> getValue w)
+          7 -> {-# SCC get_operation_write #-} (Write <$> get <*> getValue w)
+          8 -> return Begin
+          9 -> return End
+
+      eventSize :: Word8 -> Int64
+      eventSize w =
+        case w .&. 0x0f of
+          6 -> 8 + valueSize w
+          7 -> 8 + valueSize w
+          8 -> 0
+          9 -> 0
+          a | 0 <= a && a <= 5 -> 4
+
+      valueSize :: Word8 -> Int64
+      valueSize w =
+        case (w .&. 0xf0) `shiftR` 4 of
+          0 -> 1
+          1 -> 1
+          2 -> 2
+          3 -> 4
+          4 -> 8
+          5 -> 4
+          6 -> 8
+          7 -> 4
+          a -> error $ "Bad event value " ++ show a
+      {-# INLINE valueSize #-}
 
 instance Arbitrary Operation where
   arbitrary = oneof

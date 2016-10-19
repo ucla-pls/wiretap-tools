@@ -39,6 +39,7 @@ printAll = do
 readLog :: MonadIO m => Thread -> Handle -> Producer Event m ()
 readLog t handle =
   readLogEvents handle >-> eventsFromLog t
+{-# INLINABLE readLog #-}
 
 readLogEvents :: MonadIO m => Handle -> Producer LogEvent m ()
 readLogEvents = logEvents . fromHandle
@@ -49,7 +50,7 @@ eventsFromLog t = go 0
   where
     go o = do
       logEvent <- await
-      yield $ withThreadAndOrder logEvent t o
+      yield $! withThreadAndOrder logEvent t o
       go $! o + 1
 {-# INLINABLE eventsFromLog #-}
 
