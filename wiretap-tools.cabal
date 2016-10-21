@@ -32,6 +32,7 @@ executable wiretap-tools
                      , pipes
                      , pipes-binary >= 0.4.1
                      , pipes-bytestring
+                     , pipes-parse >= 3.0.7
                      , vector
                      , z3 >= 4.1.0
   hs-source-dirs:      src
@@ -61,11 +62,14 @@ benchmark wt-prof
                      , pipes
                      , pipes-binary >= 0.4.1
                      , pipes-bytestring
+                     , pipes-parse >= 3.0.7
                      , vector
                      , z3 >= 4.1.0
   hs-source-dirs:      src
   ghc-options:
     -O2
+    -threaded
     -fprof-auto
     -funbox-strict-fields
+    "-with-rtsopts=-N -s -i0.1 -hy -p"
   default-language:    Haskell2010

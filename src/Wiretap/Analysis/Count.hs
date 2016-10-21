@@ -1,13 +1,17 @@
 module Wiretap.Analysis.Count
   ( countEvents
-  , printCounter
   , counterToRow
   , counterHeader
+  , incrCounter
+  , Counter (..)
   ) where
 
 import Text.Printf
 import qualified Data.Foldable as F
 import Wiretap.Data.Event
+
+import           Pipes
+import qualified Pipes.Prelude as P
 import Prelude hiding (reads)
 
 -- | Counter, counts all the occurrences of each event.
@@ -40,22 +44,10 @@ instance Monoid Counter where
     , ends     = sum ends
     }
     where
-      {-# INLINE sum #-}
       sum f = f a + f b
 
 fromEvent :: Event -> Counter
-fromEvent Event {operation=o} =
-  case o of
-   Synch _   -> mempty { synchs = 1 }
-   Acquire _ -> mempty { acquires = 1 }
-   Request _ -> mempty { requests = 1 }
-   Release _ -> mempty { releases = 1 }
-   Fork _    -> mempty { forks = 1 }
-   Join _    -> mempty { joins = 1 }
-   Read _ _  -> mempty { reads = 1 }
-   Write _ _ -> mempty { writes = 1 }
-   Begin     -> mempty { begins = 1 }
-   End       -> mempty { ends = 1 }
+fromEvent = incrCounter mempty
 
 incrCounter :: Counter -> Event -> Counter
 incrCounter c Event {operation=o} =
@@ -70,20 +62,6 @@ incrCounter c Event {operation=o} =
    Write _ _ -> c { writes   = writes c + 1 }
    Begin     -> c { begins   = begins c + 1 }
    End       -> c { ends     = ends c + 1 }
-
-printCounter :: Counter -> IO ()
-printCounter c = do
-  printf "synchs   = %d\n" $ synchs c
-  printf "acquires = %d\n" $ acquires c
-  printf "requests = %d\n" $ requests c
-  printf "releases = %d\n" $ releases c
-  printf "forks    = %d\n" $ forks c
-  printf "joins    = %d\n" $ joins c
-  printf "reads    = %d\n" $ reads c
-  printf "writes   = %d\n" $ writes c
-  printf "begins   = %d\n" $ begins c
-  printf "ends     = %d\n" $ ends c
-
 
 counterHeader :: [String]
 counterHeader =
@@ -115,5 +93,5 @@ counterToRow c =
     ] <*> [c]
 
 
-countEvents :: Foldable f => f Event -> Counter
-countEvents = F.foldl' incrCounter mempty
+countEvents :: Monad m => Producer Event m () -> m Counter
+countEvents = P.fold incrCounter mempty id

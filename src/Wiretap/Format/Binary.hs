@@ -1,4 +1,9 @@
-module Wiretap.Format.Binary where
+module Wiretap.Format.Binary
+  ( readLog
+  , writeLog
+  , readHistory
+  , writeHistory
+  ) where
 
 import System.IO
 import           System.FilePath
@@ -18,6 +23,7 @@ import Wiretap.Data.Program
 import Pipes
 import Pipes.ByteString
 import Pipes.Binary
+import qualified Pipes.Prelude as P
 
 import Control.Lens (zoom, view)
 
@@ -36,16 +42,74 @@ printAll = do
   lift $ print event
   printAll
 
-readLog :: MonadIO m => Thread -> Handle -> Producer Event m ()
+readLog :: MonadIO m
+  => Thread
+  -> Handle
+  -> Producer Event m ()
 readLog t handle =
   readLogEvents handle >-> eventsFromLog t
 {-# INLINABLE readLog #-}
 
-readLogEvents :: MonadIO m => Handle -> Producer LogEvent m ()
-readLogEvents = logEvents . fromHandle
+writeLog :: MonadIO m
+  => Handle
+  -> Consumer Event m ()
+writeLog handle =
+  P.map (fromEvent) >-> writeLogEvents handle
+{-# INLINABLE writeLog #-}
+
+readHistory :: MonadIO m
+  => Handle
+  -> Producer Event m ()
+readHistory handle =
+  void $ view decoded $ fromHandle handle
+{-# INLINABLE readHistory #-}
+
+writeHistory :: MonadIO m
+  => Handle
+  -> Consumer Event m ()
+writeHistory handle =
+  for cat encode >-> toHandle handle
+{-# INLINABLE writeHistory #-}
+
+readLogEvents :: MonadIO m
+  => Handle
+  -> Producer LogEvent m ()
+readLogEvents = decodeLogEvents . fromHandle
 {-# INLINABLE readLogEvents #-}
 
-eventsFromLog :: Monad m => Thread -> Pipe LogEvent Event m ()
+writeLogEvents :: MonadIO m
+  => Handle
+  -> Consumer LogEvent m ()
+writeLogEvents handle =
+  encodeLogEvents >-> toHandle handle
+{-# INLINABLE writeLogEvents #-}
+
+decodeLogEvents :: Monad m
+  => Producer ByteString m r
+  -> Producer LogEvent m ()
+decodeLogEvents p = do
+   yield (LogEvent Begin)
+   view decoded p
+   yield (LogEvent End)
+{-# INLINABLE decodeLogEvents #-}
+
+encodeLogEvents :: Monad m
+  => Pipe LogEvent ByteString m ()
+encodeLogEvents = await >> go
+  where
+    go = do
+      event <- await
+      case event of
+        LogEvent End ->
+          return ()
+        otherwise -> do
+          encode event
+          go
+{-# INLINABLE encodeLogEvents #-}
+
+eventsFromLog :: Monad m
+  => Thread
+  -> Pipe LogEvent Event m ()
 eventsFromLog t = go 0
   where
     go o = do
@@ -53,12 +117,3 @@ eventsFromLog t = go 0
       yield $! withThreadAndOrder logEvent t o
       go $! o + 1
 {-# INLINABLE eventsFromLog #-}
-
-logEvents :: Monad m
-  => Producer ByteString m r
-  -> Producer LogEvent m ()
-logEvents p = do
-   yield (LogEvent Begin)
-   view decoded p
-   yield (LogEvent End)
-{-# INLINABLE logEvents #-}

@@ -34,7 +34,8 @@ patterns = [docopt|wiretap-tools version 0.1.0.0
 
 Usage:
    wiretap-tools parse <logs>
-   wiretap-tools linearize <logs>
+   wiretap-tools parse-hist <history>
+   wiretap-tools linearize [-o <out>] <logs>
    wiretap-tools count <logs>
    wiretap-tools size <logs>
    wiretap-tools (-h | --help | --version)
@@ -46,22 +47,36 @@ parse files = do
     forM_ logs $ \(f,logs) ->
       runEffect $ for logs (lift . print)
 
--- linearize :: [FilePath] -> IO ()
--- linearize files =
---   withLogs files $ \traces -> do
---      events <- linearizeTotal' (concatMap snd traces)
---      case events of
---        Left error -> putStrLn error
---        Right events -> printAll events
+parseHistory :: FilePath -> IO ()
+parseHistory file = do
+  withFile file ReadMode $ \h ->
+    runEffect $ for (readHistory h) (lift . print)
 
--- count :: [FilePath] -> IO ()
--- count files =
---   withLogs files $ \traces -> do
---     let table = map mkRow traces
---     putStrLn . L.intercalate "," $ "file" : counterHeader
---     forM_ table $ \row ->
---       putStrLn $ L.intercalate "," row
---   where mkRow (f, t) =  f : counterToRow (countEvents t)
+linearize :: Handle -> [FilePath] -> IO ()
+linearize out files =
+  withLogs files $ \logs -> do
+    runEffect $ linearize logs >-> writeHistory out
+  where
+    linearize :: [(f, Producer Event IO ())] -> Producer Event IO ()
+    linearize = sequence_ . map snd
+
+count :: [FilePath] -> IO ()
+count files =
+  withLogs files $ \logs -> do
+    counters <- mapM countEventsInLog logs
+    printHeader
+    forM_ counters printRow
+    printTotal counters
+  where
+    printHeader =
+      putStrLn . L.intercalate "," $ "file" : counterHeader
+    printRow (f, counter) =
+      putStrLn $ f ++ "," ++ L.intercalate "," (counterToRow counter)
+    printTotal counters =
+      printRow $ ("total", mconcat $ map snd counters)
+    countEventsInLog (f, events) = do
+      counter <- countEvents events
+      return (f, counter)
 
 main :: IO ()
 main = do
@@ -77,40 +92,29 @@ main = do
     logs <- getLogFiles args
     parse logs
 
-  -- onCommand "linearize" $ do
-  --   logs <- getLogFiles args
-  --   linearize logs
+  onCommand "parse-hist" $ do
+    history <- getArgOrExit args (argument "history")
+    parseHistory history
+
+  onCommand "linearize" $ do
+    logs <- getLogFiles args
+    case getArg args (shortOption 'o') of
+      Just file ->
+        withFile file WriteMode $ \h ->
+          linearize h logs
+      Nothing ->
+        linearize stdout logs
 
   onCommand "count" $ do
     logs <- getLogFiles args
-    withFile (head logs) ReadMode $ \h -> do
-      len <- readall h
-      putStrLn $ (head logs) ++ ": " ++ show len
-    -- logs <- getLogFiles args
-    -- count logs
+    count logs
 
   onCommand "size" $ do
     files <- getLogFiles args
     withLogs files $ \logs -> do
       forM_ logs $ \(f, events) -> do
-        len <- P.fold (\x e -> x + 1) 0 id events
+        len <- P.length events
         putStrLn $ f ++ ": " ++ show len
-
-data A = A
-  {-# UNPACK #-}!Word64
-  {-# UNPACK #-}!Word64
-  {-# UNPACK #-}!Word64
-
-instance Binary A where
-  put a = undefined
-  get = A <$> get <*> get <*> get
-
-type AS = [A]
-
-readall :: Handle -> IO Int
-readall h = do
-  let stream = void . view decoded $ BP.fromHandle h
-  P.fold ((\x e -> x + 1) :: Int -> A -> Int) 0 id stream
 
 withLogs :: [FilePath] -> ([(FilePath, Producer Event IO ())] -> IO a) -> IO a
 withLogs files f =
