@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP, MagicHash #-}
 module Wiretap.Data.Event where
 
 import           Data.PartialOrder
@@ -8,12 +9,21 @@ import           Data.Function (on)
 import           Data.Binary
 import           Data.Binary.Put
 import           Data.Binary.Get
+import qualified Data.Binary.Get.Internal as I
+
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Unsafe as BU
+
 
 import           Test.QuickCheck hiding ((.&.), (.|.))
 
+import GHC.Base
 import           GHC.Int
+import           GHC.Word
 
 import qualified Wiretap.Data.Program as Program
+import           Wiretap.Data.MiniParser as Program
 
 
 -- The dynamic information of the program is represented here.
@@ -257,47 +267,93 @@ instance Binary Operation where
       putWord8 9
 
   get = {-# SCC get_operation #-} do
-    w <- getWord8
-    innerGet w
+    w <- {-# SCC get_word #-} getWord8
+    getOperation w
     -- bs <- getLazyByteString (eventSize w)
     -- return $ runGet (innerGet w) bs
 
-    where
-      innerGet w =
-        case w .&. 0x0f of
-          0 -> Synch <$> getInt32be
-          1 -> Fork <$> get
-          2 -> Join <$> get
-          3 -> Request <$> get
-          4 -> Acquire <$> get
-          5 -> Release <$> get
-          6 -> {-# SCC get_operation_read #-} (Read <$> get <*> getValue w)
-          7 -> {-# SCC get_operation_write #-} (Write <$> get <*> getValue w)
-          8 -> return Begin
-          9 -> return End
 
-      eventSize :: Word8 -> Int64
-      eventSize w =
-        case w .&. 0x0f of
-          6 -> 8 + valueSize w
-          7 -> 8 + valueSize w
-          8 -> 0
-          9 -> 0
-          a | 0 <= a && a <= 5 -> 4
+drawOperation :: Word8 -> MiniParser Operation
+drawOperation w = do
+  case w .&. 0x0f of
+    0 -> Synch <$> drawInt32be
+    1 -> Fork <$> drawThread
+    2 -> Join <$> drawThread
+    3 -> Request <$> drawRef
+    4 -> Acquire <$> drawRef
+    5 -> Release <$> drawRef
+    6 -> {-# SCC get_operation_read #-} (Read <$> drawLocation <*> drawValue w)
+    7 -> {-# SCC get_operation_write #-} (Write <$> drawLocation <*> drawValue w)
+    8 -> return Begin
+    9 -> return End
 
-      valueSize :: Word8 -> Int64
-      valueSize w =
-        case (w .&. 0xf0) `shiftR` 4 of
-          0 -> 1
-          1 -> 1
-          2 -> 2
-          3 -> 4
-          4 -> 8
-          5 -> 4
-          6 -> 8
-          7 -> 4
-          a -> error $ "Bad event value " ++ show a
-      {-# INLINE valueSize #-}
+
+drawValue :: Word8 -> MiniParser Value
+drawValue w =
+  case getValueType w of
+    VByte    -> Byte <$> drawWord8
+    VChar    -> Char <$> drawWord8
+    VShort   -> Short <$> drawWord16be
+    VInteger -> Integer <$> drawWord32be
+    VLong    -> Long <$> drawWord64be
+    VFloat   -> Float <$> drawWord32be
+    VDouble  -> Double <$> drawWord64be
+    VObject  -> Object <$> drawWord32be
+
+drawLocation :: MiniParser Location
+drawLocation = do
+    r <- drawRef
+    i <- drawInt32be
+    if pointer r == 0
+      then return $ Static (Program.Field i)
+      else return $ Array r (fromIntegral i)
+
+drawRef :: MiniParser Ref
+drawRef =
+  Ref <$> drawWord32be
+
+drawThread :: MiniParser Thread
+drawThread =
+  Thread . fromIntegral <$> drawInt32be
+
+
+getOperation :: Word8 -> Get Operation
+getOperation w =
+  case w .&. 0x0f of
+    0 -> Synch <$> getInt32be
+    1 -> Fork <$> get
+    2 -> Join <$> get
+    3 -> Request <$> get
+    4 -> Acquire <$> get
+    5 -> Release <$> get
+    6 -> {-# SCC get_operation_read #-} (Read <$> get <*> getValue w)
+    7 -> {-# SCC get_operation_write #-} (Write <$> get <*> getValue w)
+    8 -> return Begin
+    9 -> return End
+
+eventSize :: Word8 -> Int64
+eventSize w =
+  case w .&. 0x0f of
+    6 -> 8 + valueSize w
+    7 -> 8 + valueSize w
+    8 -> 0
+    9 -> 0
+    a | 0 <= a && a <= 5 -> 4
+{-# INLINE eventSize #-}
+
+valueSize :: Word8 -> Int64
+valueSize w =
+  case (w .&. 0xf0) `shiftR` 4 of
+    0 -> 1
+    1 -> 1
+    2 -> 2
+    3 -> 4
+    4 -> 8
+    5 -> 4
+    6 -> 8
+    7 -> 4
+    a -> error $ "Bad event value " ++ show a
+{-# INLINE valueSize #-}
 
 instance Arbitrary Operation where
   arbitrary = oneof

@@ -19,13 +19,16 @@ import Data.Bits
 
 import Wiretap.Data.Event
 import Wiretap.Data.Program
+import Wiretap.Data.MiniParser
 
 import Pipes
 import Pipes.ByteString
 import Pipes.Binary
+import Pipes.Parse
 import qualified Pipes.Prelude as P
 
 import Control.Lens (zoom, view)
+
 
 readLog' :: FilePath -> IO ()
 readLog' fp =
@@ -47,7 +50,7 @@ readLog :: MonadIO m
   -> Handle
   -> Producer Event m ()
 readLog t handle =
-  readLogEvents handle >-> eventsFromLog t
+  readLogEvents' handle >-> eventsFromLog t
 {-# INLINABLE readLog #-}
 
 writeLog :: MonadIO m
@@ -92,6 +95,26 @@ decodeLogEvents p = do
    view decoded p
    yield (LogEvent End)
 {-# INLINABLE decodeLogEvents #-}
+
+
+readLogEvents' :: MonadIO m
+  => Handle
+  -> Producer LogEvent m ()
+readLogEvents' h = do
+  bs <- liftIO $ BL.hGetContents h
+  yield (LogEvent Begin)
+  go bs
+  yield (LogEvent End)
+  where
+    go bs =
+      case runMiniParser drawOpr bs of
+        Just (a, bs') -> yield (LogEvent a) >> go bs'
+        Nothing -> return ()
+    drawOpr = do
+      w <- drawWord8
+      drawOperation w
+{-# INLINABLE readLogEvents' #-}
+
 
 encodeLogEvents :: Monad m
   => Pipe LogEvent ByteString m ()
