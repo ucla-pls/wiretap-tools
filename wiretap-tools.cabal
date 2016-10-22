@@ -67,9 +67,8 @@ benchmark wt-prof
                      , z3 >= 4.1.0
   hs-source-dirs:      src
   ghc-options:
-    -O2
+    -O3
     -threaded
     -fprof-auto
     -funbox-strict-fields
-    "-with-rtsopts=-N -s -i0.1 -hy -p"
   default-language:    Haskell2010

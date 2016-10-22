@@ -6,6 +6,8 @@ import           Data.Word
 import           Data.Bits
 import           Data.Function (on)
 
+import           Numeric
+
 import           Data.Binary
 import           Data.Binary.Put
 import           Data.Binary.Get
@@ -273,8 +275,28 @@ instance Binary Operation where
     -- return $ runGet (innerGet w) bs
 
 
+parseOperation :: Word8 -> MP Operation
+parseOperation w bs i =
+  case w .&. 0x0f of
+    0 -> Synch <$> parseInt32be bs i
+    1 -> Fork <$> parseThread bs i
+    2 -> Join <$> parseThread bs i
+    3 -> Request <$> parseRef bs i
+    4 -> Acquire <$> parseRef bs i
+    5 -> Release <$> parseRef bs i
+    6 ->
+      let (i', l) = parseLocation bs i in
+      Read l <$> parseValue w bs i'
+    7 ->
+      let (i', l) = parseLocation bs i in
+      Write l <$> parseValue w bs i'
+    8 -> (i, Begin)
+    9 -> (i, End)
+    _ -> error $ "Unknown operation '" ++ showHex (fromIntegral w) "'"
+{-# INLINEABLE parseOperation #-}
+
 drawOperation :: Word8 -> MiniParser Operation
-drawOperation w = do
+drawOperation w = {-# SCC drawOperation #-}
   case w .&. 0x0f of
     0 -> Synch <$> drawInt32be
     1 -> Fork <$> drawThread
@@ -282,11 +304,12 @@ drawOperation w = do
     3 -> Request <$> drawRef
     4 -> Acquire <$> drawRef
     5 -> Release <$> drawRef
-    6 -> {-# SCC get_operation_read #-} (Read <$> drawLocation <*> drawValue w)
-    7 -> {-# SCC get_operation_write #-} (Write <$> drawLocation <*> drawValue w)
+    6 -> Read <$> drawLocation <*> drawValue w
+    7 -> Write <$> drawLocation <*> drawValue w
     8 -> return Begin
     9 -> return End
-
+    _ -> error $ "Unknown operation '" ++ showHex (fromIntegral w) "'"
+{-# INLINEABLE drawOperation #-}
 
 drawValue :: Word8 -> MiniParser Value
 drawValue w =
@@ -299,22 +322,59 @@ drawValue w =
     VFloat   -> Float <$> drawWord32be
     VDouble  -> Double <$> drawWord64be
     VObject  -> Object <$> drawWord32be
+{-# INLINEABLE drawValue #-}
+
+parseValue :: Word8 -> MP Value
+parseValue w bs i =
+  case getValueType w of
+    VByte    -> Byte <$> parseWord8 bs i
+    VChar    -> Char <$> parseWord8 bs i
+    VShort   -> Short <$> parseWord16be bs i
+    VInteger -> Integer <$> parseWord32be bs i
+    VLong    -> Long <$> parseWord64be bs i
+    VFloat   -> Float <$> parseWord32be bs i
+    VDouble  -> Double <$> parseWord64be bs i
+    VObject  -> Object <$> parseWord32be bs i
+{-# INLINEABLE parseValue #-}
 
 drawLocation :: MiniParser Location
 drawLocation = do
-    r <- drawRef
+    w <- drawWord32be
     i <- drawInt32be
-    if pointer r == 0
+    if w == 0
       then return $ Static (Program.Field i)
-      else return $ Array r (fromIntegral i)
+      else return $ Array (Ref w) (fromIntegral i)
+{-# INLINE drawLocation #-}
+
+parseLocation :: MP Location
+parseLocation bs i =
+    if w == 0
+      then Static . Program.Field <$> n
+      else Array (Ref w) . fromIntegral <$> n
+    where
+      n = parseInt32be bs i'
+      (i', w) = parseWord32be bs i
+{-# INLINE parseLocation #-}
+
+parseRef :: MP Ref
+parseRef bs i =
+  Ref <$> parseWord32be bs i
+{-# INLINE parseRef #-}
 
 drawRef :: MiniParser Ref
 drawRef =
   Ref <$> drawWord32be
+{-# INLINE drawRef #-}
+
+parseThread :: MP Thread
+parseThread bs i =
+  Thread . fromIntegral <$> parseInt32be bs i
+{-# INLINE parseThread #-}
 
 drawThread :: MiniParser Thread
 drawThread =
   Thread . fromIntegral <$> drawInt32be
+{-# INLINE drawThread #-}
 
 
 getOperation :: Word8 -> Get Operation

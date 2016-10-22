@@ -12,6 +12,7 @@ import Debug.Trace
 import GHC.Int (Int32)
 
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString as B
 
 import Data.Binary.Get
 import Data.Word
@@ -106,13 +107,18 @@ readLogEvents' h = do
   go bs
   yield (LogEvent End)
   where
-    go bs =
-      case runMiniParser drawOpr bs of
-        Just (a, bs') -> yield (LogEvent a) >> go bs'
-        Nothing -> return ()
-    drawOpr = do
-      w <- drawWord8
-      drawOperation w
+    go bs = do
+       case BL.uncons bs of
+          Just (w, bs') ->
+                let n = eventSize w
+                    (bs'', rest) = BL.splitAt n bs'
+                    strict = BL.toStrict bs'' in
+                if B.length strict /= fromIntegral n
+                  then return ()
+                  else do
+                    yield (LogEvent . snd $ parseOperation w strict 0)
+                    go rest
+          Nothing -> return ()
 {-# INLINABLE readLogEvents' #-}
 
 
