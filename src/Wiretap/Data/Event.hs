@@ -276,7 +276,7 @@ instance Binary Operation where
 
 
 parseOperation :: Word8 -> MP Operation
-parseOperation w bs i =
+parseOperation w bs i = --{-# SCC parseOperation #-}
   case w .&. 0x0f of
     0 -> Synch <$> parseInt32be bs i
     1 -> Fork <$> parseThread bs i
@@ -391,7 +391,7 @@ getOperation w =
     8 -> return Begin
     9 -> return End
 
-eventSize :: Word8 -> Int64
+eventSize :: Word8 -> Int
 eventSize w =
   case w .&. 0x0f of
     6 -> 8 + valueSize w
@@ -399,9 +399,10 @@ eventSize w =
     8 -> 0
     9 -> 0
     a | 0 <= a && a <= 5 -> 4
+    a -> error $ "Unknown eventSize '" ++ showHex (fromIntegral a) "'"
 {-# INLINE eventSize #-}
 
-valueSize :: Word8 -> Int64
+valueSize :: Word8 -> Int
 valueSize w =
   case (w .&. 0xf0) `shiftR` 4 of
     0 -> 1

@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 module Wiretap.Format.Binary
   ( readLog
   , writeLog
@@ -13,6 +14,7 @@ import GHC.Int (Int32)
 
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Unsafe as BU
 
 import Data.Binary.Get
 import Data.Word
@@ -51,7 +53,7 @@ readLog :: MonadIO m
   -> Handle
   -> Producer Event m ()
 readLog t handle =
-  readLogEvents' handle >-> eventsFromLog t
+  readLogEvents'' handle >-> eventsFromLog t
 {-# INLINABLE readLog #-}
 
 writeLog :: MonadIO m
@@ -107,19 +109,59 @@ readLogEvents' h = do
   go bs
   yield (LogEvent End)
   where
-    go bs = do
-       case BL.uncons bs of
-          Just (w, bs') ->
-                let n = eventSize w
-                    (bs'', rest) = BL.splitAt n bs'
-                    strict = BL.toStrict bs'' in
-                if B.length strict /= fromIntegral n
-                  then return ()
-                  else do
-                    yield (LogEvent . snd $ parseOperation w strict 0)
-                    go rest
-          Nothing -> return ()
+    go bs = {-# SCC go #-}
+      case BL.uncons bs of
+        Just (w, bs') -> {-# SCC go_just #-}
+          let n = eventSize w
+              (bs'', rest) = BL.splitAt (fromIntegral n) bs'
+              strict = BL.toStrict bs'' in
+          if B.length strict /= fromIntegral n
+            then return ()
+            else do
+              yield (LogEvent . snd $ parseOperation w strict 0)
+              go rest
+        Nothing -> return ()
 {-# INLINABLE readLogEvents' #-}
+
+
+readLogEvents'' :: MonadIO m
+  => Handle
+  -> Producer LogEvent m ()
+readLogEvents'' h = do
+  yield (LogEvent Begin)
+  go (hGetSome 10242880 h) B.empty
+  yield (LogEvent End)
+  where
+    -- go :: Producer B.ByteString m () -> B.ByteString -> Producer LogEvent m ()
+    go !p !rest = do -- {-# SCC go #-} do
+      nextBs <- next p
+      case nextBs of
+        Right (bs, p') ->
+          if B.null bs
+            then
+              go p' rest
+            else do
+              let bs' = B.append rest bs
+              i <- go' bs' 0
+              go p' $ BU.unsafeDrop i bs'
+        Left _ ->
+          return ()
+
+    -- go' :: B.ByteString -> Int -> Producer LogEvent m Int
+    go' bs !i = -- {-# SCC go' #-}
+      if B.length bs > i then
+         let w = BU.unsafeIndex bs i
+             n = eventSize w
+             i' = (i + 1 + n)
+         in
+         if B.length bs >= i'
+         then do
+            yield . LogEvent . snd $ parseOperation w bs (i + 1)
+            go' bs i'
+         else
+           return i
+     else return i
+{-# INLINABLE readLogEvents'' #-}
 
 
 encodeLogEvents :: Monad m
