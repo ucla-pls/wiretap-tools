@@ -18,6 +18,7 @@ import           Wiretap.Format.Binary
 -- import           Wiretap.Analysis(linearizeTotal')
 
 import           Wiretap.Analysis.Count
+import           Wiretap.Analysis.Linearize
 
 import           Pipes
 import           Pipes.Binary
@@ -55,10 +56,13 @@ parseHistory file = do
 linearize :: Handle -> [FilePath] -> IO ()
 linearize out files =
   withLogs files $ \logs -> do
-    runEffect $ linearize logs >-> writeHistory out
+    runEffect $ linearize logs
+      >-> chuncks
+      >-> joinChunks
+      >-> writeHistory out
   where
     linearize :: [(f, Producer Event IO ())] -> Producer Event IO ()
-    linearize = sequence_ . map snd
+    linearize = mergeAll . map snd
 
 count :: [FilePath] -> IO ()
 count files =

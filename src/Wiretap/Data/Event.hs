@@ -210,7 +210,7 @@ instance Arbitrary Value where
     ]
 
 data Operation
-  = Synch Int32
+  = Synch Int
 
   | Fork Thread
   | Join Thread
@@ -230,7 +230,7 @@ instance Binary Operation where
   put o = case o of
     Synch i -> do
       putWord8 0
-      putInt32be i
+      putInt32be $ fromIntegral i
 
     Fork t -> do
       putWord8 1
@@ -278,7 +278,7 @@ instance Binary Operation where
 parseOperation :: Word8 -> MP Operation
 parseOperation w bs i = --{-# SCC parseOperation #-}
   case w .&. 0x0f of
-    0 -> Synch <$> parseInt32be bs i
+    0 -> Synch . fromIntegral <$> parseInt32be bs i
     1 -> Fork <$> parseThread bs i
     2 -> Join <$> parseThread bs i
     3 -> Request <$> parseRef bs i
@@ -298,9 +298,9 @@ parseOperation w bs i = --{-# SCC parseOperation #-}
 drawOperation :: Word8 -> MiniParser Operation
 drawOperation w = {-# SCC drawOperation #-}
   case w .&. 0x0f of
-    0 -> Synch <$> drawInt32be
+    0 -> Synch . fromIntegral <$> drawInt32be
     1 -> Fork <$> drawThread
-    2 -> Join <$> drawThread
+
     3 -> Request <$> drawRef
     4 -> Acquire <$> drawRef
     5 -> Release <$> drawRef
@@ -380,7 +380,7 @@ drawThread =
 getOperation :: Word8 -> Get Operation
 getOperation w =
   case w .&. 0x0f of
-    0 -> Synch <$> getInt32be
+    0 -> Synch . fromIntegral <$> getInt32be
     1 -> Fork <$> get
     2 -> Join <$> get
     3 -> Request <$> get
