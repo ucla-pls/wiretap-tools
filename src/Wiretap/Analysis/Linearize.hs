@@ -47,6 +47,13 @@ chuncks :: Monad m
 chuncks =
   chunck >~ cat
 
+progress :: MonadIO m
+  => Pipe ([Event], Event) ([Event], Event) m ()
+progress = forever $ do
+  (l, a) <- await
+  liftIO . putStrLn $ show (synchValue a) ++ ": " ++ show (length l)
+  yield (l, a)
+
 joinChunks :: Monad m
   => Pipe ([Event], Event) Event m ()
 joinChunks = do

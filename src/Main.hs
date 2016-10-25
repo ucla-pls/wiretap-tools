@@ -58,6 +58,7 @@ linearize out files =
   withLogs files $ \logs -> do
     runEffect $ linearize logs
       >-> chuncks
+      >-> progress
       >-> joinChunks
       >-> writeHistory out
   where
@@ -67,20 +68,17 @@ linearize out files =
 count :: [FilePath] -> IO ()
 count files =
   withLogs files $ \logs -> do
-    counters <- mapM countEventsInLog logs
     printHeader
-    forM_ counters printRow
-    printTotal counters
+    counters <- forM logs $ \(f, events) -> do
+      counter <- countEvents events
+      printRow (f, counter)
+      return counter
+    printRow ("total", mconcat counters)
   where
     printHeader =
       putStrLn . L.intercalate "," $ "file" : counterHeader
     printRow (f, counter) =
       putStrLn $ f ++ "," ++ L.intercalate "," (counterToRow counter)
-    printTotal counters =
-      printRow $ ("total", mconcat $ map snd counters)
-    countEventsInLog (f, events) = do
-      counter <- countEvents events
-      return (f, counter)
 
 main :: IO ()
 main = do
