@@ -44,9 +44,9 @@ instance Arbitrary Thread where
 prop_ThreadIsBinary = prop_isBinary :: Thread -> Bool
 
 data Event = Event
-  { operation :: !Operation
-  , thread    :: !Thread
+  { thread    :: !Thread
   , order     :: !Int32
+  , operation :: !Operation
   } deriving (Show, Eq, Ord)
 
 instance PartialOrder Event where
@@ -55,15 +55,14 @@ instance PartialOrder Event where
   cmp a b =
     Nothing
 
-
 instance Binary Event where
-  put (Event opr t o) = do
-    put opr
+  put (Event t o opr) = do
     put t
     put o
+    put opr
 
   get =
-    Event <$> get <*> get <*> getInt32be
+    Event <$> get <*> getInt32be <*> get
 
 instance Arbitrary Event where
   arbitrary = Event <$> arbitrary <*> arbitrary <*> arbitrary
@@ -75,7 +74,7 @@ newtype LogEvent = LogEvent
   } deriving (Eq, Show)
 
 withThreadAndOrder :: LogEvent -> Thread -> Int32 -> Event
-withThreadAndOrder opr t i = Event (logOperation opr) t i
+withThreadAndOrder opr t i = Event t i (logOperation opr)
 
 fromEvent :: Event -> LogEvent
 fromEvent = LogEvent . operation

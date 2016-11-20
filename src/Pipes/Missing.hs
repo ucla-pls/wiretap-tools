@@ -1,18 +1,20 @@
 {-# LANGUAGE RankNTypes #-}
 module Pipes.Missing where
 
-import Control.Monad
-import Data.Maybe
-import Pipes
+import           Control.Monad
+import           Data.Maybe
+import           Pipes
 import qualified Pipes.Prelude as P
 
-
-done :: Monad m => a -> Producer' (Either a b) m r'
+done :: Monad m
+  => a
+  -> Producer' (Either a b) m r'
 done a =
   forever $ do
     yield $ Left a
 
-done' :: Monad m => Producer' (Maybe b) m r'
+done' :: Monad m
+  => Producer' (Maybe b) m r'
 done' =
   forever $ do
     yield Nothing
@@ -27,13 +29,17 @@ It's up to the user to prove that the producer really is finite
 This makes it
 easier to figure out if the underlying pipe has been closed or not.
 -}
-finite :: Monad m => Producer b m r -> Finite b m r
+finite :: Monad m
+  => Producer b m r
+  -> Finite b m r
 finite p = do
   r <- p >-> P.map Right
   done r
 
 {-| endless' is the same thing but discards the return value. -}
-finite' :: Monad m => Producer b m () -> Finite' b m
+finite' :: Monad m
+  => Producer b m ()
+  -> Finite' b m
 finite' p = do
   p >-> P.map Just
   done'
@@ -41,15 +47,17 @@ finite' p = do
 {-| end runs a proven finite pipe to the end,
     yielding the return value
 -}
-end :: Monad m => Pipe (Either r b) b m r
+end :: Monad m
+  => Pipe (Either r b) b m r
 end = do
   a <- await
   case a of
     Right b' -> yield b' >> end
-    Left r -> return r
+    Left r   -> return r
 
 {-| end' is the same as end' but without return value -}
-end' :: Monad m => Pipe (Maybe b) b m ()
+end' :: Monad m
+  => Pipe (Maybe b) b m ()
 end' = do
   a <- await
   case a of
@@ -137,27 +145,33 @@ type SubProducer a' b' b m = Producer b (Pipe a' b' m)
 type SubConsumer a' b' b m = Producer b (Pipe a' b' m)
 
 
-receive :: Monad m => SubROEffect' a m a
+receive :: Monad m
+  => SubROEffect' a m a
 receive = lift await
 
-send :: Monad m => b -> SubWOEffect' b m ()
+send :: Monad m
+  => b -> SubWOEffect' b m ()
 send = lift . yield
 
-recover :: Monad m => SubROProducer' a a m ()
+recover :: Monad m
+  => SubROProducer' a a m ()
 recover = do
   x <- receive
   yield x
 
-dispatch :: Monad m => SubWOConsumer' b b m ()
+dispatch :: Monad m
+  => SubWOConsumer' b b m ()
 dispatch = do
   x <- await
   send x
 
-passthrough :: Monad m => SubRWEffect' a a m ()
+passthrough :: Monad m
+  => SubRWEffect' a a m ()
 passthrough = do
   lift $ await >>= yield
 
-sample :: Monad m => SubRWProducer' a a a m ()
+sample :: Monad m
+  => SubRWProducer' a a a m ()
 sample = do
   x <- lift $ do
     x <- await
@@ -165,7 +179,8 @@ sample = do
     return x
   yield x
 
-dispatchAll :: Monad m => SubWOConsumer' b b m r
+dispatchAll :: Monad m
+  => SubWOConsumer' b b m r
 dispatchAll =
   forever dispatch
 
@@ -173,11 +188,13 @@ dispatchAll =
 put it in the sub pipe.
 -}
 
-take' :: Monad m => Int -> SubROProducer' a a m ()
+take' :: Monad m
+  => Int -> SubROProducer' a a m ()
 take' n = do
   replicateM_ n recover
 
-takeEvery :: Monad m => Int -> SubRWProducer' a a a m r
+takeEvery :: Monad m
+  => Int -> SubRWProducer' a a a m r
 takeEvery n = do
   replicateM_ (n - 1) passthrough
   recover
@@ -186,7 +203,8 @@ takeEvery n = do
 {-| tee' takes every element from the super pipe into the
   sub pipe, while allowing the elements to pass-through . -}
 
-tee' :: Monad m => SubRWProducer' a a a m ()
+tee' :: Monad m
+  => SubRWProducer' a a a m ()
 tee' =
   forever sample
 
@@ -195,7 +213,8 @@ tee' =
 
   The copy ends when the super pipe runs out of real values.
 -}
-copy' :: Monad m => SubRWProducer' (Maybe a) a a m ()
+copy' :: Monad m
+  => SubRWProducer' (Maybe a) a a m ()
 copy' = do
   a <- receive
   case a of
@@ -240,7 +259,8 @@ joinProducer sp =
 returns false. The first false element is return as it has already
 taken from the super pipe.
 -}
-takeWhileS :: Monad m => (a -> Bool) -> SubROProducer' a a m a
+takeWhileS :: Monad m
+  => (a -> Bool) -> SubROProducer' a a m a
 takeWhileS f = do
   a <- receive
   case (f a) of
@@ -260,15 +280,18 @@ asList' :: Monad m
   -> Proxy x' x y' y m ([a], r)
 asList' = P.toListM'
 
-count :: Monad m => Pipe (Maybe a) a m Int
+count :: Monad m
+  => Pipe (Maybe a) a m Int
 count =
   subFold (\b a -> b + 1) 0
 
-pcount :: Monad m => Producer a m () -> Producer a m Int
+pcount :: Monad m
+  => Producer a m () -> Producer a m Int
 pcount p =
   finite' p >-> count
 
-test :: MonadIO m => Pipe (Maybe String) String m ()
+test :: MonadIO m
+  => Pipe (Maybe String) String m ()
 test = do
   yield $ "Hello World"
   c <- count
