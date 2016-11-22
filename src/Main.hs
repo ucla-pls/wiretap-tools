@@ -4,24 +4,32 @@ module Main where
 
 import           System.Console.Docopt
 import           System.Directory
-import           System.Environment     (getArgs)
+import           System.Environment              (getArgs)
 import           System.FilePath
 import           System.IO
 
 import           Control.Monad
 
-import           Pipes
-import qualified Pipes.Prelude          as P
+import qualified Data.List as L
 
-import           Wiretap.Format.Binary
+import           Pipes
+import qualified Pipes.Prelude                   as P
+
 import           Wiretap.Analysis.Count
+import           Wiretap.Format.Binary
+import           Wiretap.Format.Text
+
+
+import           Wiretap.Analysis.LockCandidates
+import           Wiretap.Analysis.RaceCandidates
 
 patterns :: Docopt
 patterns = [docopt|wiretap-tools version 0.1.0.0
 
 Usage:
    wiretap-tools (parse|count|size) [<history>]
-   wiretap-tools (race-candidates|lock-candidates) [<history>]
+   wiretap-tools (race-candidates|shared-locations) [<history>]
+   wiretap-tools (lockset) [<history>]
    wiretap-tools (-h | --help | --version)
 |]
 
@@ -49,10 +57,32 @@ main = do
         withHistory (f . readHistory)
 
   onCommand "parse" $ \history -> do
-    runEffect $ for history (lift . print)
+    runEffect $ for history (lift . print . PP)
 
   onCommand "count" $ \history -> do
     print =<< countEvents history
 
   onCommand "size" $ \history -> do
     print =<< P.length history
+
+  onCommand "shared-locations" $ \history -> do
+    a <- locations <$> P.toListM history
+    forM_ a $ \(l, es) -> do
+      print l
+      forM_ es $ \(a, b) -> do
+        putStrLn $ "  A = " ++ pp a
+        putStrLn $ "  B = " ++ pp b
+        putStrLn ""
+
+  onCommand "race-candidates" $ \history -> do
+    es <- raceCandidates <$> P.toListM history
+    forM_ es $ \(a, b) -> do
+      putStrLn $ "A = " ++ pp a
+      putStrLn $ "B = " ++ pp b
+      putStrLn ""
+
+  onCommand "lockset" $ \history -> do
+    es <- lockset' <$> P.toListM history
+    forM_ es $ \(a, b) -> do
+      let s = pp a
+      putStrLn $ s ++ L.replicate (60 - length s) ' ' ++ " - " ++ pp b
