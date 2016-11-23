@@ -1,33 +1,46 @@
 module Wiretap.Analysis.RaceCandidates where
 
-import Prelude hiding (reads)
+import           Prelude                         hiding (reads)
 
-import Debug.Trace
+import           Debug.Trace
 
-import qualified Data.List          as L
-import qualified Data.Map           as M
+import qualified Data.List                       as L
+import qualified Data.Map                        as M
 
-import Data.Function (on)
+import           Data.Function                   (on)
+import           Data.Traversable
+import           Data.Foldable
+import           Data.Unique
 
-import Control.Monad
+import           Wiretap.Analysis.LockCandidates
+
+import           Control.Monad
 
 
 import           Wiretap.Data.Event
 
-data Collection = Collection
-  { reads :: [(Location, Event)]
-  , writes :: [(Location, Event)]
+data Collection a = Collection
+  { reads  :: [(Location, a)]
+  , writes :: [(Location, a)]
   } deriving (Show)
 
-add :: Collection -> Event -> Collection
-add c e =
-  case operation e of
+add
+  :: (a -> Event)
+  -> Collection a
+  -> a
+  -> Collection a
+add f c e =
+  case operation . f $ e of
     Read l _  -> c { reads = (l,e) : reads c }
     Write l _ -> c { writes = (l,e) : writes c }
     _         -> c
 
-readwrites es = (reads c, writes c)
-  where c = L.foldl' add (Collection [] []) es
+readwrites :: Foldable t
+  => (a -> Event)
+  -> t a
+  -> ([(Location, a)], [(Location, a)])
+readwrites f es = (reads c, writes c)
+  where c = foldl' (add f) (Collection [] []) es
 
 groupOnFst :: Eq a
   => [(a, b)]
@@ -46,20 +59,23 @@ crossproduct :: [a] -> [b] -> [(a, b)]
 crossproduct =
   liftM2 $ \a b -> (a,b)
 
-raceCandidates :: [Event] -> [(Event, Event)]
-raceCandidates events = candidates
+raceCandidates :: UniqueMap Event -> [(Unique Event, Unique Event)]
+raceCandidates events =
+  lockfilter events (M.empty) candidates
   where
     candidates = concatMap snd . locations $ events
 
-locations :: [Event] -> [(Location, [(Event, Event)])]
+locations :: UniqueMap Event -> [(Location, [(Unique Event, Unique Event)])]
 locations events =
   filter (not . L.null . snd) . map combineLocation $ byLocation writes
   where
     combineLocation (l, ws) =
-      (l, filter (\(a, b) -> thread a /= thread b) pairs)
+      (l, filter (\(a, b) -> thread (normal a) /= thread (normal b)) pairs)
       where
         pairs =
-          combinations ws ++ crossproduct ws (maybe [] id $ M.lookup l readsByLocation)
+          combinations ws ++ readwriteconflicts
+        readwriteconflicts =
+          crossproduct ws (maybe [] id $ M.lookup l readsByLocation)
 
     readsByLocation =
       M.fromAscList $ byLocation reads
@@ -67,4 +83,4 @@ locations events =
     byLocation =
       groupOnFst . L.sortOn fst
 
-    (reads, writes) = readwrites events
+    (reads, writes) = readwrites normal (toVector events)

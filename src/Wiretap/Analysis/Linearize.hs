@@ -12,6 +12,7 @@ import           Pipes
 import           Pipes.Missing
 import qualified Pipes.Prelude      as P
 
+
 import           Z3.Monad
 
 import           Wiretap.Data.Event

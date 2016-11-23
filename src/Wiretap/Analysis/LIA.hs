@@ -3,14 +3,13 @@ module Wiretap.Analysis.LIA where
 import qualified Data.Vector as V
 import qualified Data.List as L
 
-import           Data.Function (on)
+import Data.Unique
 
 import Z3.Monad (AST, mkLt, mkAnd, mkOr
                 , withModel, evalInt
                 , mkFreshIntVar, MonadZ3)
 
 {-| LIA - Linear integer arithmetic -}
-
 data LIA e
   = Order e e
   | And [LIA e]
@@ -28,23 +27,7 @@ pairwise f es = zipWith f es (tail es)
 orders ::  [e] -> [e] -> LIA e
 orders as bs = And [ a ~> b | a <- as, b <- bs ]
 
-{-| Takes elements and make them unique by assigning an identifier -}
-data Unique e = Unique
- { idx :: !Int
- , normal :: e
- } deriving (Show)
-
-instance Eq (Unique e) where
-  (==) = (==) `on` idx
-
-instance Ord (Unique e) where
-  compare = compare `on` idx
-
-byIndex :: [a] -> [Unique a]
-byIndex = L.zipWith Unique [0..]
-
-{-| solve takes a vector of elements and logic constraints
--}
+{-| solve takes a vector of elements and logic constraints -}
 solve :: MonadZ3 m
   => [Unique e]
   -> LIA (Unique e)

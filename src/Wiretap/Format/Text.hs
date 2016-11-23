@@ -6,6 +6,8 @@ import Numeric
 
 import qualified Data.List as L
 
+import Data.Unique
+
 import Wiretap.Data.Event
 import Wiretap.Data.Program
 
@@ -69,6 +71,9 @@ instance Show (PP Ref) where
   show (PP (Ref r)) =
     "r!" ++ showHex r ""
 
+instance Show (PP a) => Show (PP (Unique a)) where
+  show (PP (Unique i e)) =
+    "(" ++ show i ++ "," ++ pp e ++ ")"
 
 instance Show (PP a) => Show (PP [a]) where
   show (PP as) =

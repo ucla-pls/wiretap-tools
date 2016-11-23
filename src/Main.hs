@@ -10,7 +10,9 @@ import           System.IO
 
 import           Control.Monad
 
-import qualified Data.List as L
+import           Data.Unique
+
+import qualified Data.List                       as L
 
 import           Pipes
 import qualified Pipes.Prelude                   as P
@@ -29,7 +31,7 @@ patterns = [docopt|wiretap-tools version 0.1.0.0
 Usage:
    wiretap-tools (parse|count|size) [<history>]
    wiretap-tools (race-candidates|shared-locations) [<history>]
-   wiretap-tools (lockset) [<history>]
+   wiretap-tools (lockset|lock-candidates) [<history>]
    wiretap-tools (-h | --help | --version)
 |]
 
@@ -42,20 +44,11 @@ helpNeeded args =
 main :: IO ()
 main = do
   args <- parseArgsOrExit patterns =<< getArgs
-
   when (helpNeeded args) $ exitWithUsage patterns
+  runcommand args
 
-  let
-    withHistory f = do
-      case getArg args (argument "history") of
-        Just history ->
-          withFile history ReadMode f
-        Nothing ->
-          f stdin
-    onCommand cmd f =
-      when (args `isPresent` command cmd) $ do
-        withHistory (f . readHistory)
-
+runcommand :: Arguments -> IO ()
+runcommand args = do
   onCommand "parse" $ \history -> do
     runEffect $ for history (lift . print . PP)
 
@@ -66,16 +59,16 @@ main = do
     print =<< P.length history
 
   onCommand "shared-locations" $ \history -> do
-    a <- locations <$> P.toListM history
+    a <- locations . fromList <$> P.toListM history
     forM_ a $ \(l, es) -> do
-      print l
+      putStrLn $ pp l
       forM_ es $ \(a, b) -> do
         putStrLn $ "  A = " ++ pp a
         putStrLn $ "  B = " ++ pp b
         putStrLn ""
 
   onCommand "race-candidates" $ \history -> do
-    es <- raceCandidates <$> P.toListM history
+    es <- raceCandidates . fromList <$> P.toListM history
     forM_ es $ \(a, b) -> do
       putStrLn $ "A = " ++ pp a
       putStrLn $ "B = " ++ pp b
@@ -86,3 +79,21 @@ main = do
     forM_ es $ \(a, b) -> do
       let s = pp a
       putStrLn $ s ++ L.replicate (60 - length s) ' ' ++ " - " ++ pp b
+
+  onCommand "lock-candidates" $ \history -> do
+    es <- lockCandidates . fromList <$> P.toListM history
+    forM_ es $ \(a, b) -> do
+      putStrLn $ "A = " ++ pp a
+      putStrLn $ "B = " ++ pp b
+      putStrLn ""
+
+  where
+    withHistory f = do
+      case getArg args (argument "history") of
+        Just history ->
+          withFile history ReadMode f
+        Nothing ->
+          f stdin
+    onCommand cmd f =
+      when (args `isPresent` command cmd) $ do
+        withHistory (f . readHistory)
