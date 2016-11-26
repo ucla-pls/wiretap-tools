@@ -3,15 +3,19 @@ module Data.Unique where
 import           Data.Traversable
 import qualified Data.Vector as V
 
-import           Data.Function    (on)
+import           Wiretap.Utils
 
-(...) = (.) . (.)
+import           Data.Function    (on)
+import qualified Data.IntMap as M
 
 {-| Takes elements and make them unique by assigning an identifier -}
 data Unique e = Unique
  { idx    :: !Int
  , normal :: e
  } deriving (Show)
+
+toPair :: Unique e -> (Int, e)
+toPair e = (idx e, normal e)
 
 instance Functor Unique where
   fmap f (Unique i e) = Unique i (f e)
@@ -27,32 +31,14 @@ byIndex :: Traversable t
   -> t (Unique a)
 byIndex = snd . mapAccumL (\i e ->((i + 1), Unique i e)) 0
 
-newtype UniqueMap e = UniqueMap
-  { toVector :: V.Vector (Unique e)
+newtype UMap a = UMap
+  { toIntMap :: M.IntMap a
   } deriving (Show)
 
-(!*) :: UniqueMap e -> Unique b -> Unique e
-(!*) m e = toVector m V.! idx e
+{-| Assumes that unique is from to  -}
+fromUniques :: [Unique a] -> UMap a
+fromUniques =
+  UMap . M.fromDistinctAscList . map toPair
 
-(!) :: UniqueMap e -> Unique b -> e
-(!) = normal ... (!*)
-
-fromVector :: V.Vector a -> UniqueMap a
-fromVector = UniqueMap . byIndex
-
-fromList :: [a] -> UniqueMap a
-fromList = UniqueMap . byIndex . V.fromList
-
-instance Functor UniqueMap where
-  fmap f =
-   UniqueMap . fmap (fmap f) . toVector
-
-instance Foldable UniqueMap where
-  foldMap f =
-    foldMap (f . normal) . toVector
-  foldr f b =
-    foldr (f . normal) b . toVector
-
-instance Traversable UniqueMap where
-  traverse f es =
-    fromVector <$> traverse (f . normal) (toVector es)
+(!) :: UMap a -> Unique b -> a
+m ! u = toIntMap m M.! idx u

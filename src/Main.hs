@@ -21,17 +21,18 @@ import           Wiretap.Analysis.Count
 import           Wiretap.Format.Binary
 import           Wiretap.Format.Text
 
+import           Wiretap.Data.History
 
-import           Wiretap.Analysis.LockCandidates
-import           Wiretap.Analysis.RaceCandidates
+import           Wiretap.Analysis.Lock
+import           Wiretap.Analysis.DataRace
 
 patterns :: Docopt
 patterns = [docopt|wiretap-tools version 0.1.0.0
 
 Usage:
    wiretap-tools (parse|count|size) [<history>]
-   wiretap-tools (race-candidates|shared-locations) [<history>]
-   wiretap-tools (lockset|lock-candidates) [<history>]
+   wiretap-tools (race-candidates|shared-locations|dataraces) [<history>]
+   wiretap-tools (lockset|deadlock-candidates) [<history>]
    wiretap-tools (-h | --help | --version)
 |]
 
@@ -49,17 +50,17 @@ main = do
 
 runcommand :: Arguments -> IO ()
 runcommand args = do
-  onCommand "parse" $ \history -> do
-    runEffect $ for history (lift . print . PP)
+  onCommand "parse" $ \events -> do
+    runEffect $ for events (lift . print . PP)
 
-  onCommand "count" $ \history -> do
-    print =<< countEvents history
+  onCommand "count" $ \events -> do
+    print =<< countEvents events
 
-  onCommand "size" $ \history -> do
-    print =<< P.length history
+  onCommand "size" $ \events -> do
+    print =<< P.length events
 
-  onCommand "shared-locations" $ \history -> do
-    a <- locations . fromList <$> P.toListM history
+  onCommand "shared-locations" $ \events -> do
+    a <- sharedLocations . fromEvents <$> P.toListM events
     forM_ a $ \(l, es) -> do
       putStrLn $ pp l
       forM_ es $ \(a, b) -> do
@@ -67,33 +68,40 @@ runcommand args = do
         putStrLn $ "  B = " ++ pp b
         putStrLn ""
 
-  onCommand "race-candidates" $ \history -> do
-    es <- raceCandidates . fromList <$> P.toListM history
+  onCommand "race-candidates" $ \events -> do
+    es <- raceCandidates . fromEvents <$> P.toListM events
     forM_ es $ \(a, b) -> do
       putStrLn $ "A = " ++ pp a
       putStrLn $ "B = " ++ pp b
       putStrLn ""
 
-  onCommand "lockset" $ \history -> do
-    es <- lockset' <$> P.toListM history
+  onCommand "dataraces" $ \events -> do
+    es <- raceCandidates . fromEvents <$> P.toListM events
     forM_ es $ \(a, b) -> do
-      let s = pp a
+      putStrLn $ "A = " ++ pp a
+      putStrLn $ "B = " ++ pp b
+      putStrLn ""
+
+  onCommand "lockset" $ \events -> do
+    locks <- lockset . fromEvents <$> P.toListM events
+    forM_ locks $ \(e, b) -> do
+      let s = pp e
       putStrLn $ s ++ L.replicate (60 - length s) ' ' ++ " - " ++ pp b
 
-  onCommand "lock-candidates" $ \history -> do
-    es <- lockCandidates . fromList <$> P.toListM history
+  onCommand "deadlock-candidates" $ \events -> do
+    es <- deadlockCandidates . fromEvents <$> P.toListM events
     forM_ es $ \(a, b) -> do
       putStrLn $ "A = " ++ pp a
       putStrLn $ "B = " ++ pp b
       putStrLn ""
 
   where
-    withHistory f = do
-      case getArg args (argument "history") of
-        Just history ->
-          withFile history ReadMode f
+    withEvents f = do
+      case getArg args (argument "events") of
+        Just events ->
+          withFile events ReadMode f
         Nothing ->
           f stdin
     onCommand cmd f =
       when (args `isPresent` command cmd) $ do
-        withHistory (f . readHistory)
+        withEvents (f . readHistory)
