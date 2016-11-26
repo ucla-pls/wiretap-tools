@@ -25,6 +25,7 @@ import           Wiretap.Data.History
 
 import           Wiretap.Analysis.Lock
 import           Wiretap.Analysis.DataRace
+import           Wiretap.Analysis.Permute
 
 patterns :: Docopt
 patterns = [docopt|wiretap-tools version 0.1.0.0
@@ -32,7 +33,7 @@ patterns = [docopt|wiretap-tools version 0.1.0.0
 Usage:
    wiretap-tools (parse|count|size) [<history>]
    wiretap-tools (race-candidates|shared-locations|dataraces) [<history>]
-   wiretap-tools (lockset|deadlock-candidates) [<history>]
+   wiretap-tools (lockset|deadlock-candidates|deadlocks) [<history>]
    wiretap-tools (-h | --help | --version)
 |]
 
@@ -76,11 +77,18 @@ runcommand args = do
       putStrLn ""
 
   onCommand "dataraces" $ \events -> do
-    es <- raceCandidates . fromEvents <$> P.toListM events
-    forM_ es $ \(a, b) -> do
-      putStrLn $ "A = " ++ pp a
-      putStrLn $ "B = " ++ pp b
-      putStrLn ""
+    h <- fromEvents <$> P.toListM events
+    let candidates = raceCandidates h
+    forM_ candidates $ \(a, b) -> do
+      let s = pp a
+      putStrLn $ s ++ L.replicate (55 - length s) ' ' ++ " - " ++ pp b
+      r <- permute h (a, b)
+      case r of
+        Nothing -> putStrLn "FAIL"
+        Just t -> do
+          putStrLn "SUCCES"
+          forM_ t $ \e ->
+            putStrLn $ ">>> " ++ pp e
 
   onCommand "lockset" $ \events -> do
     locks <- lockset . fromEvents <$> P.toListM events
@@ -94,6 +102,20 @@ runcommand args = do
       putStrLn $ "A = " ++ pp a
       putStrLn $ "B = " ++ pp b
       putStrLn ""
+
+  onCommand "deadlocks" $ \events -> do
+    h <- fromEvents <$> P.toListM events
+    let candidates = deadlockCandidates h
+    forM_ candidates $ \(a, b) -> do
+      let s = pp a
+      putStrLn $ s ++ L.replicate (55 - length s) ' ' ++ " - " ++ pp b
+      r <- permute h (a, b)
+      case r of
+        Nothing -> putStrLn "FAIL"
+        Just t -> do
+          putStrLn "SUCCES"
+          forM_ t $ \e ->
+            putStrLn $ ">>> " ++ pp e
 
   where
     withEvents f = do
