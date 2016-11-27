@@ -22,7 +22,8 @@ instance Show (PP Thread) where
 
 instance Show (PP Event) where
   show (PP e) =
-    pp (thread e) ++ "." ++ show (order e) ++ " " ++ pp (operation e)
+    let op = show (order e) in
+    pp (thread e) ++ "." ++ (replicate (4 - length op) '0') ++ op ++ " " ++ pp (operation e)
 
 instance Show (PP Operation) where
   show (PP o) =
@@ -73,7 +74,8 @@ instance Show (PP Ref) where
 
 instance Show (PP a) => Show (PP (Unique a)) where
   show (PP (Unique i e)) =
-    "(" ++ show i ++ "," ++ pp e ++ ")"
+    let s = show i in
+    (replicate (5 - length s) ' ') ++ s ++ " | " ++ pp e
 
 instance Show (PP a) => Show (PP [a]) where
   show (PP as) =

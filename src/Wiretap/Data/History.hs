@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 module Wiretap.Data.History where
 
 import qualified Data.Vector as V
@@ -19,6 +20,9 @@ class PartialHistory h where
 instance PartialHistory History where
   enumerate =
     byIndex . toList . toVector
+
+instance PartialHistory [Unique Event] where
+  enumerate = id
 
 simulate :: PartialHistory h
   => (Unique Event -> a -> a)
@@ -43,3 +47,15 @@ hfilter :: PartialHistory h
   => (Unique Event -> Bool) -> h -> [Unique Event]
 hfilter f =
   filter f . enumerate
+
+withPair :: PartialHistory h
+  => (Unique Event, Unique Event) -> h -> [Unique Event]
+withPair (a, b) h =
+  case span isNotAB $ enumerate h of
+    (xs, ab : ys) ->
+      case span isNotAB ys of
+        (ys', ab' : rest) -> concat [xs, [ab], ys', [ab']]
+        (ys', []) -> concat [xs, [ab], ys']
+    (xs, []) -> xs
+  where
+    isNotAB e = e /= a && e /= b

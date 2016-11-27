@@ -36,8 +36,8 @@ readwrites =
 raceCandidates :: PartialHistory h
   => h
   -> [(Unique Event, Unique Event)]
-raceCandidates h =
-  lockfilter lockset candidates
+raceCandidates h = candidates
+  -- lockfilter lockset candidates
   where
     candidates = concatMap snd . sharedLocations $ h
     lockset = fst $ locksetSimulation M.empty h
