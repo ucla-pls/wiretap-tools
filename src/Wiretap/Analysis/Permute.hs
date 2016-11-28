@@ -1,39 +1,23 @@
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TemplateHaskell  #-}
 module Wiretap.Analysis.Permute where
-
-import qualified Data.List              as L
-import qualified Data.Map               as M
-import           Wiretap.Data.Event
-
-import           Data.PartialOrder
-
-import           Debug.Trace
 
 import           Prelude                hiding (reads)
 
-import           Data.Unique
-import           Wiretap.Analysis.LIA
-import           Wiretap.Data.History
-
-import           Control.Monad.IO.Class
-
 import           Control.Lens
+import           Control.Monad.IO.Class
+import qualified Data.List              as L
+import qualified Data.Map               as M
 
-data MHB = MHB
-  { _forks  ::  [Unique Event]
-  , _joins  ::  [Unique Event]
-  , _begins :: [Unique Event]
-  , _ends   ::   [Unique Event]
-  } deriving (Show)
-makeLenses ''MHB
+import           Debug.Trace
 
-data RWC = RWC
-  { _reads  ::  [(Value, Unique Event)]
-  , _writes :: [(Value, Unique Event)]
-  } deriving (Show)
-makeLenses ''RWC
+import           Data.PartialOrder
+import           Data.Unique
 
-emptyMHB = MHB [] [] [] []
+import           Wiretap.Analysis.LIA
+import           Wiretap.Data.Event
+import           Wiretap.Data.History
+import           Wiretap.Utils
 
 sc h =
   And [ totalOrder t | t <- traces ]
@@ -46,21 +30,52 @@ sc h =
 mhb :: PartialHistory h => h -> LIA (Unique Event)
 mhb h =
   And . concat $
-    [ [ orders (t ^. forks) (t ^. begins)
-      , orders (t ^. ends) (t ^. joins) ]
-    | t <- M.elems $ simulate step M.empty h
+    [ [ orders forks begins
+      , orders ends joins ]
+    | (joins, forks, begins, ends) <- M.elems $ simulate step M.empty h
     ]
   where
     step u@(Unique _ e) =
       case operation e of
-        Join t -> update u joins t
-        Fork t -> update u forks t
-        Begin  -> update u begins $ thread e
-        End    -> update u ends $ thread e
+        Join t -> update u _1 t
+        Fork t -> update u _2 t
+        Begin  -> update u _3 $ thread e
+        End    -> update u _4 $ thread e
         _      -> id
     update u l t =
-      M.alter (Just . over l (u:) . maybe emptyMHB id) t
+      M.alter (Just . over l (u:) . maybe ([], [], [], []) id) t
 
+{-| this method expects h to be a true history, so that by thread any lock acquired
+will be released by the same thread, and that there is no cross releasing -}
+lc :: PartialHistory h => h -> LIA (Unique Event)
+lc h =
+  And $ concat
+    [
+      [ Or [ r ~> a',  r' ~> a ]
+      | ((a, r), (a', r')) <- combinations lockPairs
+      ]
+      ++
+      [ r ~> a
+      | ((_, r), a) <- crossproduct lockPairs remainders
+      ]
+    | (lockPairs, remainders) <- M.elems $ simulate step M.empty h
+    ]
+  where
+    step u@(Unique _ e) =
+      case operation e of
+        Acquire l -> update acq (thread e)
+        Release l -> update rel (thread e)
+        _         -> id
+      where
+        acq (pairs, stack) =
+          (pairs, u:stack)
+        rel (pairs, stack) =
+          case stack of
+            acq:stack' -> ((acq, u):pairs, stack')
+            [] -> error "Can't release a lock that has not been acquired"
+
+    update f t =
+      M.alter (Just . f . maybe ([],[]) id) t
 
 rwc :: PartialHistory h => h -> LIA (Unique Event)
 rwc h =
@@ -72,22 +87,19 @@ rwc h =
         ]
       | (_, w) <- filter ((v ==) . fst) writes
       ]
-    | (l, RWC reads writes) <- locations
+    | (l, (reads, writes)) <- readAndWritesBylocation
     , (v, r) <- reads
     , not $ L.null writes
   ]
   where
-    locations = M.assocs $ simulate step M.empty h
+    readAndWritesBylocation = M.assocs $ simulate step M.empty h
     step u@(Unique _ e) =
       case operation e of
-        Read l v  -> update (v, u) reads l
-        Write l v -> update (v, u) writes l
+        Read l v  -> update (v, u) _1 l
+        Write l v -> update (v, u) _2 l
         _         -> id
     update u f l =
-      M.alter (Just . over f (u:) . maybe (RWC [] []) id) l
-
-
-
+      M.alter (Just . over f (u:) . maybe ([], []) id) l
 
 {-| permute takes partial history and two events, if the events can be arranged
 next to each other return. -}
@@ -101,5 +113,5 @@ permute h (a, b) =
   where
     events = withPair (a, b) h
     equation =
-      And $
-        [ sc, mhb, rwc] <*> [events]
+      And $ (Eq a b) :
+        ([ sc, mhb, rwc] <*> [events])
