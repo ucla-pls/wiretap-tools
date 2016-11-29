@@ -58,7 +58,7 @@ sharedLocations h =
         teq (a, b) =
           thread (normal a) /= thread (normal b)
     readsByLocation =
-      M.fromAscList $ byLocation reads
+      M.fromDistinctAscList $ byLocation reads
 
     byLocation =
       groupOnFst . L.sortOn fst

@@ -21,9 +21,11 @@ import           Wiretap.Analysis.Count
 import           Wiretap.Format.Binary
 import           Wiretap.Format.Text
 
+import           Wiretap.Data.Event
 import           Wiretap.Data.History
 
 import           Wiretap.Analysis.Lock
+import           Wiretap.Analysis.LIA
 import           Wiretap.Analysis.DataRace
 import           Wiretap.Analysis.Permute
 
@@ -34,6 +36,7 @@ Usage:
    wiretap-tools (parse|count|size) [<history>]
    wiretap-tools (race-candidates|shared-locations|dataraces) [<history>]
    wiretap-tools (lockset|deadlock-candidates|deadlocks) [<history>]
+   wiretap-tools (dot) [<history>]
    wiretap-tools (-h | --help | --version)
 |]
 
@@ -117,6 +120,11 @@ runcommand args = do
           forM_ t $ \e ->
             putStrLn $ ">>> " ++ pp e
 
+  onCommand "dot" $ \events -> do
+    h <- fromEvents <$> P.toListM events
+    let lia = contraints h
+    putStrLn . cnf2dot h $ toCNF lia
+
   where
     withEvents f = do
       case getArg args (argument "events") of
@@ -127,3 +135,35 @@ runcommand args = do
     onCommand cmd f =
       when (args `isPresent` command cmd) $ do
         withEvents (f . readHistory)
+
+cnf2dot :: PartialHistory h => h -> [[LIAAtom (Unique Event)]] -> String
+cnf2dot h cnf = unlines $
+  [ "digraph {"
+  , "edge [ colorscheme = paired12 ]"
+  ]
+  ++ [ unlines $ map printEvent (Wiretap.Data.History.enumerate h)]
+  ++ [ unlines $ printConjunction color cj
+     | (color, cj) <- zip (cycle $ map show [1..12]) cnf
+     ]
+  ++ [ "}" ]
+  where
+    p u = "O" ++ show (idx u)
+    printEvent u@(Unique id event) =
+      p u ++ " [ shape = box, fontsize = 10, label = \""
+          ++ pp (operation event) ++ "\", "
+          ++ "pos = \"" ++ show (threadId (thread event) * 200)
+          ++ "," ++ show (- id * 75) ++ "!\" ];"
+    printAtom color constrain atom =
+      case atom of
+        AOrder a b -> "\"" ++ p a ++ "\" -> \"" ++ p b ++ "\" "
+           ++ case constrain of
+                True -> ";"
+                False ->
+                  "[ overlap=false; constraint=false, style=dashed, color=\""
+                  ++ color ++ "\"];"
+        AEq a b -> "\"" ++ p a ++ "\" -- \"" ++ p b ++ "\""
+
+    printConjunction color [e] =
+      [ printAtom "black" True e ]
+    printConjunction color es =
+      map (printAtom color False) es

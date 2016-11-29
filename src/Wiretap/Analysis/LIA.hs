@@ -32,6 +32,33 @@ pairwise f es = zipWith f es (tail es)
 orders ::  [e] -> [e] -> LIA e
 orders as bs = And [ a ~> b | a <- as, b <- bs ]
 
+data LIAAtom e
+ = AOrder e e
+ | AEq e e
+ deriving (Show)
+
+toCNF :: LIA e -> [[LIAAtom e]]
+toCNF a =
+  case a of
+    Order a b -> [[AOrder a b]]
+    Eq a b -> [[AOrder a b]]
+    And es ->
+      concatMap toCNF es
+    Or es ->
+      combinate (product (++)) $ map toCNF es
+  where
+    combinate :: ([a] -> [a] -> [a]) -> [[a]] -> [a]
+    combinate f l =
+      case l of
+        a':[] -> a'
+        a':as -> f a' $ combinate f as
+        [] -> []
+
+    product :: (a -> b -> c) -> [a] -> [b] -> [c]
+    product f as bs =
+      [ f a b | a <- as, b <- bs ]
+
+
 {-| solve takes a vector of elements and logic constraints -}
 solve :: MonadIO m
   => [Unique e]
