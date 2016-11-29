@@ -56,7 +56,11 @@ mhb h =
       updateDefault ([], [], [], []) (over l (u:))
 
 {-| this method expects h to be a true history, so that by thread any lock acquired
-will be released by the same thread, and that there is no cross releasing -}
+will be released by the same thread, and that there is no cross releasing
+
+TODO: Re-entreant locks.
+TODO: RWC for the lock.
+-}
 lc :: PartialHistory h => h -> LIA (Unique Event)
 lc h =
   And
@@ -71,7 +75,7 @@ lc h =
       [ r ~> a
       | ((_, r), a) <-
           crossproduct lockPairs (def [] $ M.lookup l remainders)
-      , r ~/> a, a ~/> r
+      , r ~/> a
       ]
     ]
   | (l, lockPairs) <- lockPairsSet
@@ -112,7 +116,7 @@ rwc h =
       ]
     | (v', w) <- writes
     , v' == v
-    , w ~/> r, r ~/> w
+    , r ~/> w
     ]
   | (reads, writes) <- readAndWritesBylocation
   , (v, r) <- reads
