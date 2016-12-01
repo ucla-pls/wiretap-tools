@@ -23,7 +23,7 @@ sc h =
   And [ totalOrder t | t <- traces ]
   where
     traces =
-      map reverse . M.elems $ simulate step M.empty h
+      M.elems $ simulateReverse step M.empty h
     step u@(Unique _ e) =
       updateDefault [] (u:) $ thread e
 
@@ -60,6 +60,7 @@ will be released by the same thread, and that there is no cross releasing
 
 TODO: Re-entreant locks.
 TODO: RWC for the lock.
+TODO: Remainders, what do we use them for.
 -}
 lc :: PartialHistory h => h -> LIA (Unique Event)
 lc h =
@@ -105,22 +106,92 @@ lc h =
 
     update = updateDefault ([], [])
 
-rwc :: PartialHistory h => h -> LIA (Unique Event)
-rwc h =
-  And
-  [ Or
-    [ And $ w ~> r :
+
+{- Control flow consistency. This predicate requires that the history
+is re-playable in the program up to this point, in respect to branches.
+-}
+cfc
+  :: PartialHistory h
+  => Unique Event
+  -> h
+  -> LIA (Unique Event)
+cfc u@(Unique idx e) h =
+  And [ rc h r | r <- requiredReads ]
+  where
+    requiredReads :: [(Location, Value, Unique Event)]
+    requiredReads = filter requiredRead $
+      case branch of
+        Just b ->
+          filter ((b ~/>) . (^. _3)) reads
+        Nothing ->
+          reads
+
+    requiredRead (l, v, r) =
+      case v of
+        Object vref ->
+          any (\(ref, u) -> vref == pointer ref && u ~/> r) requiredRefs
+        otherwise -> False
+
+    (threads, reads, requiredRefs, branch) =
+      simulateReverse step ([thread e], [],[], Nothing) h
+
+    step u@(Unique _ e') s@(ts, rd, rf, b)=
+      if L.elem (thread e') ts
+      then
+        case operation e of
+          Read l v -> over _2 ((l, v, u):) s
+          Request r -> over _3 ((r, u):) s
+          Fork t | L.elem t ts ->
+                   over _1 (t:) s
+          _ -> s
+      else
+        s
+
+{- Read consistency, make sure that the read is reading the same value. -}
+rc
+  :: PartialHistory h
+  => h
+  -> (Location, Value, Unique Event)
+  -> LIA (Unique Event)
+rc h (l, v, r) =
+  Or
+  [ And
+    [ And
       [ Or [ w' ~> w, r ~> w']
       | (_, w') <- writes
       , w' /= w , w' ~/> w, r ~/> w'
       ]
+    , And $ if w ~/> r then [w ~> r] else []
+    , cfc w h
+    ]
+  | (v', w) <- writes
+  , v' == v
+  , r ~/> w
+  ]
+  where
+    writes = simulate step [] h
+    step u@(Unique _ e') =
+      case operation e' of
+        Write l' v | l' == l -> ((v, u):)
+        _ -> id
+
+rwc :: PartialHistory h => h -> LIA (Unique Event)
+rwc h =
+  And
+  [ Or
+    [ And $
+      [ Or [ w' ~> w, r ~> w']
+      | (_, w') <- writes
+      , w' /= w , w' ~/> w, r ~/> w'
+      ]
+      ++ if w ~/> r then [w ~> r] else []
     | (v', w) <- writes
     , v' == v
     , r ~/> w
     ]
   | (reads, writes) <- readAndWritesBylocation
   , (v, r) <- reads
-  , not $ L.null writes
+  , not . L.null $ (filter ((v ==) . fst )) writes
   ]
   where
     readAndWritesBylocation =
@@ -143,16 +214,17 @@ permute
   => h
   -> (Unique Event, Unique Event)
   -> m (Maybe [Unique Event])
-permute h (a, b) =
-  solve events equation
-  where
-    events = withPair (a, b) h
-    equation =
-      And [ Eq a b, contraints h]
+permute h (a, b) = do
+  solution <- solve (enumerate h) (pcontraints h (a, b))
+  return $ withPair (a, b) <$> solution
+
+pcontraints h (a, b) =
+  And $ Eq a b :
+    ([ sc, mhb, lc ] <*> [h])
 
 contraints
   :: PartialHistory h
   => h
   -> LIA (Unique Event)
 contraints h =
-  And $ [ sc, mhb, rwc, lc] <*> [h]
+  And $ [ sc, mhb, lc] <*> [h]

@@ -41,7 +41,7 @@ toCNF :: LIA e -> [[LIAAtom e]]
 toCNF a =
   case a of
     Order a b -> [[AOrder a b]]
-    Eq a b -> [[AOrder a b]]
+    Eq a b -> [[AEq a b]]
     And es ->
       concatMap toCNF es
     Or es ->

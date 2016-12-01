@@ -111,10 +111,15 @@ runcommand args = do
     let candidates = deadlockCandidates h
     forM_ candidates $ \(a, b) -> do
       let s = pp a
+          c = pcontraints h' (a, b)
+          h' = withPair (a, b) h
       putStrLn $ s ++ L.replicate (55 - length s) ' ' ++ " - " ++ pp b
-      r <- permute h (a, b)
+      r <- permute h' (a, b)
       case r of
-        Nothing -> putStrLn "FAIL"
+        Nothing -> do
+          putStrLn "FAIL"
+          writeFile ("fail-" ++ show (idx a) ++ "-" ++ show (idx b) ++ ".dot") $
+            (cnf2dot h' . toCNF $ c)
         Just t -> do
           putStrLn "SUCCES"
           forM_ t $ \e ->
@@ -139,11 +144,12 @@ runcommand args = do
 cnf2dot :: PartialHistory h => h -> [[LIAAtom (Unique Event)]] -> String
 cnf2dot h cnf = unlines $
   [ "digraph {"
-  , "edge [ colorscheme = paired12 ]"
+  , "graph [overlap=false, splines=true];"
+  , "edge [ colorscheme = dark28 ]"
   ]
   ++ [ unlines $ map printEvent (Wiretap.Data.History.enumerate h)]
   ++ [ unlines $ printConjunction color cj
-     | (color, cj) <- zip (cycle $ map show [1..12]) cnf
+     | (color, cj) <- zip (cycle $ map show [1..8]) cnf
      ]
   ++ [ "}" ]
   where
@@ -159,9 +165,10 @@ cnf2dot h cnf = unlines $
            ++ case constrain of
                 True -> ";"
                 False ->
-                  "[ overlap=false; constraint=false, style=dashed, color=\""
-                  ++ color ++ "\"];"
-        AEq a b -> "\"" ++ p a ++ "\" -- \"" ++ p b ++ "\""
+                  "[ style=dashed, color=\"" ++ color ++ "\"];"
+        AEq a b ->
+             "\"" ++ p a ++ "\" -> \"" ++ p b ++ "\"; "
+          ++ "\"" ++ p b ++ "\" -> \"" ++ p a ++ "\""
 
     printConjunction color [e] =
       [ printAtom "black" True e ]

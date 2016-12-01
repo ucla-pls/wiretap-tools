@@ -30,6 +30,13 @@ simulate :: PartialHistory h
 simulate f a h =
   foldl' (flip f) a (enumerate h)
 
+simulateReverse :: PartialHistory h
+  => (Unique Event -> a -> a)
+  -> a -> h -> a
+simulateReverse f a h =
+  foldl' (flip f) a (reverse . enumerate $ h)
+
+
 simulateM :: (PartialHistory h, Monad m)
   => (Unique Event -> m a)
   -> h -> m [Unique a]
