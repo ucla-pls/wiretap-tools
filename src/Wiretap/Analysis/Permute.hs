@@ -19,13 +19,9 @@ import           Wiretap.Data.Event
 import           Wiretap.Data.History
 import           Wiretap.Utils
 
+sc :: PartialHistory h => h -> LIA (Unique Event)
 sc h =
-  And [ totalOrder t | t <- traces ]
-  where
-    traces =
-      M.elems $ simulateReverse step M.empty h
-    step u@(Unique _ e) =
-      updateDefault [] (u:) $ thread e
+  And [ totalOrder es | (t, es) <- byThread h ]
 
 mhb :: PartialHistory h => h -> LIA (Unique Event)
 mhb h =
@@ -106,6 +102,33 @@ lc h =
 
     update = updateDefault ([], [])
 
+rwc :: PartialHistory h => h -> LIA (Unique Event)
+rwc h =
+  And
+  [ Or
+    [ And $
+      [ Or [ w' ~> w, r ~> w']
+      | (_, w') <- writes
+      , w' /= w , w' ~/> w, r ~/> w'
+      ]
+      ++ if w ~/> r then [w ~> r] else []
+    | (v', w) <- writes
+    , v' == v
+    , r ~/> w
+    ]
+  | (reads, writes) <- readAndWritesBylocation
+  , (v, r) <- reads
+  , not . L.null $ (filter ((v ==) . fst )) writes
+  ]
+  where
+    readAndWritesBylocation =
+      M.elems $ simulate step M.empty h
+    step u@(Unique _ e) =
+      case operation e of
+        Read l v  -> update (v, u) _1 l
+        Write l v -> update (v, u) _2 l
+        _         -> id
+    update u f = updateDefault ([], []) (over f (u:))
 
 {- Control flow consistency. This predicate requires that the history
 is re-playable in the program up to this point, in respect to branches.
@@ -118,26 +141,26 @@ cfc
 cfc u@(Unique idx e) h =
   And [ rc h r | r <- requiredReads ]
   where
-    requiredReads :: [(Location, Value, Unique Event)]
-    requiredReads = filter requiredRead $
-      case branch of
-        Just b ->
-          filter ((b ~/>) . (^. _3)) reads
-        Nothing ->
-          reads
+    requiredReads =
+      filter requiredRead $
+        case branch of
+          Just b ->
+            [ r | r <- reads, b ~/> (r ^. _3) ]
+          Nothing ->
+            reads
 
     requiredRead (l, v, r) =
       case v of
         Object vref ->
           any (\(ref, u) -> vref == pointer ref && u ~/> r) requiredRefs
-        otherwise -> False
+        otherwise ->
+          False
 
     (threads, reads, requiredRefs, branch) =
-      simulateReverse step ([thread e], [],[], Nothing) h
+      simulateReverse step ([thread e], [], [], Nothing) h
 
-    step u@(Unique _ e') s@(ts, rd, rf, b)=
-      if L.elem (thread e') ts
-      then
+    step u@(Unique _ e') s@(ts, rd, rf, b) =
+      if L.elem (thread e') ts then
         case operation e of
           Read l v -> over _2 ((l, v, u):) s
           Request r -> over _3 ((r, u):) s
@@ -174,35 +197,6 @@ rc h (l, v, r) =
       case operation e' of
         Write l' v | l' == l -> ((v, u):)
         _ -> id
-
-rwc :: PartialHistory h => h -> LIA (Unique Event)
-rwc h =
-  And
-  [ Or
-    [ And $
-      [ Or [ w' ~> w, r ~> w']
-      | (_, w') <- writes
-      , w' /= w , w' ~/> w, r ~/> w'
-      ]
-      ++ if w ~/> r then [w ~> r] else []
-    | (v', w) <- writes
-    , v' == v
-    , r ~/> w
-    ]
-  | (reads, writes) <- readAndWritesBylocation
-  , (v, r) <- reads
-  , not . L.null $ (filter ((v ==) . fst )) writes
-  ]
-  where
-    readAndWritesBylocation =
-      M.elems $ simulate step M.empty h
-    step u@(Unique _ e) =
-      case operation e of
-        Read l v  -> update (v, u) _1 l
-        Write l v -> update (v, u) _2 l
-        _         -> id
-    update u f = updateDefault ([], []) (over f (u:))
-
 
 (~/>) (Unique _ a) (Unique _ b) =
   not (a !< b)

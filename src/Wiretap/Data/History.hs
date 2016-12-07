@@ -1,14 +1,15 @@
 {-# LANGUAGE FlexibleInstances #-}
 module Wiretap.Data.History where
 
-import qualified Data.Vector as V
+import           Control.Monad
+import           Data.Foldable
+import qualified Data.Map           as M
+import           Data.Unique
+import qualified Data.Vector        as V
 
-import Wiretap.Data.Event
+import           Wiretap.Data.Event
+import           Wiretap.Utils
 
-import Data.Unique
-import Data.Foldable
-
-import Control.Monad
 
 newtype History = History
   { toVector :: V.Vector Event
@@ -36,7 +37,6 @@ simulateReverse :: PartialHistory h
 simulateReverse f a h =
   foldl' (flip f) a (reverse . enumerate $ h)
 
-
 simulateM :: (PartialHistory h, Monad m)
   => (Unique Event -> m a)
   -> h -> m [Unique a]
@@ -62,7 +62,16 @@ withPair (a, b) h =
     (xs, ab : ys) ->
       case span isNotAB ys of
         (ys', ab' : rest) -> concat [xs, [ab], ys', [ab']]
-        (ys', []) -> concat [xs, [ab], ys']
+        (ys', [])         -> concat [xs, [ab], ys']
     (xs, []) -> xs
   where
     isNotAB e = e /= a && e /= b
+
+byThread :: PartialHistory h
+  => h
+  -> [(Thread, [Unique Event])]
+byThread =
+  M.assocs . simulateReverse step M.empty
+  where
+  step u@(Unique _ e) =
+    updateDefault [] (u:) $ thread e

@@ -158,7 +158,7 @@ cnf2dot h cnf = unlines $
       p u ++ " [ shape = box, fontsize = 10, label = \""
           ++ pp (operation event) ++ "\", "
           ++ "pos = \"" ++ show (threadId (thread event) * 200)
-          ++ "," ++ show (- id * 75) ++ "!\" ];"
+          ++ "," ++ show (- (order event) * 75) ++ "!\" ];"
     printAtom color constrain atom =
       case atom of
         AOrder a b -> "\"" ++ p a ++ "\" -> \"" ++ p b ++ "\" "
