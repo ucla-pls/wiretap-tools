@@ -107,6 +107,13 @@ data Location
   | Array !Ref !Int32
   deriving (Show, Eq, Ord)
 
+ref :: Location -> Maybe Ref
+ref l =
+  case l of
+    Dynamic r _ -> Just r
+    Array r _ -> Just r
+    otherwise -> Nothing
+
 instance Binary Location where
   put (Array r i) = put r >> put i
   put (Static i) = putInt32be 0 >> put i

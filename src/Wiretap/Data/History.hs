@@ -69,9 +69,9 @@ withPair (a, b) h =
 
 byThread :: PartialHistory h
   => h
-  -> [(Thread, [Unique Event])]
+  -> M.Map Thread [Unique Event]
 byThread =
-  M.assocs . simulateReverse step M.empty
+  simulateReverse step M.empty
   where
   step u@(Unique _ e) =
     updateDefault [] (u:) $ thread e
