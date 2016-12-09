@@ -205,22 +205,24 @@ controlFlowConsistency
   -> h
   -> LIA UE
 controlFlowConsistency us h =
-  And [ consistent (S.empty) u | u <- us ]
+  consistent (S.empty) (S.unions [ cfc u | u <- us ])
   where
-  consistent visited u =
+  cfc u = S.fromAscList (controlFlowDependencies h u)
+
+  consistent visited deps =
     And [ And $ onReads readConsitency depends
         , And $ onAcquires lockConsitency depends
         ]
     where
     depends =
-      S.fromAscList (controlFlowDependencies h u) S.\\ visited
+      deps S.\\ visited
 
     visited' =
       visited `S.union` depends
 
     readConsitency r (l, v) =
       Or
-      [ And $ consistent visited' w : w ~> r :
+      [ And $ consistent visited' (cfc w) : w ~> r :
         [ Or [ w' ~> w, r ~> w']
         | (_, w') <- rwrites
         , w' /= w , w' ~/> w, r ~/> w'
