@@ -1,9 +1,11 @@
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE LambdaCase #-}
 module Wiretap.Data.History where
 
 import           Control.Monad
 import           Data.Foldable
 import qualified Data.Map           as M
+import qualified Data.Set           as S
 import           Data.Unique
 import qualified Data.Vector        as V
 
@@ -24,6 +26,9 @@ instance PartialHistory History where
 
 instance PartialHistory [Unique Event] where
   enumerate = id
+
+instance PartialHistory (S.Set (Unique Event)) where
+  enumerate = S.toAscList
 
 simulate :: PartialHistory h
   => (Unique Event -> a -> a)
@@ -76,28 +81,38 @@ byThread =
   step u@(Unique _ e) =
     updateDefault [] (u:) $ thread e
 
+onEvent
+  :: PartialHistory h
+  => (Operation -> Maybe b)
+  -> (Unique Event -> b -> a)
+  -> h
+  -> [a]
+onEvent g f =
+  simulateReverse (\u -> maybe id ((:) . f u) . g . operation . normal $ u) []
+
 onReads
   :: PartialHistory h
   => (Unique Event -> (Location, Value) -> a)
   -> h
   -> [a]
-onReads f =
-  simulateReverse step []
-  where
-    step u =
-      case operation . normal $ u of
-        Read l v -> (f u (l, v):)
-        otherwise -> id
+onReads = onEvent filter
+  where filter (Read l v) = Just (l, v)
+        filter _ = Nothing
 
 onWrites
   :: PartialHistory h
   => (Unique Event -> (Location, Value) -> a)
   -> h
   -> [a]
-onWrites f =
-  simulateReverse step []
-  where
-    step u =
-      case operation . normal $ u of
-        Write l v -> (f u (l, v):)
-        otherwise -> id
+onWrites = onEvent filter
+  where filter (Write l v) = Just (l, v)
+        filter _ = Nothing
+
+onAcquires
+  :: PartialHistory h
+  => (Unique Event -> Ref -> a)
+  -> h
+  -> [a]
+onAcquires = onEvent filter
+  where filter (Acquire r) = Just r
+        filter _ = Nothing

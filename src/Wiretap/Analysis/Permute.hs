@@ -196,8 +196,6 @@ controlFlowDependencies h u@(Unique _ e) =
           over _1 (u':) s
         Acquire r ->
           (u':events, r `S.insert` refs, branch)
-        Release r ->
-          (u':events, refs, branch)
         otherwise ->
           s
 
@@ -209,14 +207,13 @@ controlFlowConsistency
 controlFlowConsistency us h =
   And [ consistent (S.empty) u | u <- us ]
   where
-  consistent visited u' =
-    if S.null depends then
-      lc $ S.toAscList visited
-    else
-      And $ onReads readConsitency (S.toList depends)
+  consistent visited u =
+    And [ And $ onReads readConsitency depends
+        , And $ onAcquires lockConsitency depends
+        ]
     where
     depends =
-      S.fromAscList (controlFlowDependencies h u') S.\\ visited
+      S.fromAscList (controlFlowDependencies h u) S.\\ visited
 
     visited' =
       visited `S.union` depends
@@ -234,9 +231,65 @@ controlFlowConsistency us h =
       where
         rwrites = writes M.! l
 
+    lockConsitency a ref =
+      -- Any acquire we test is already controlFlowConsistent, covered by the
+      -- dependencies in the controlFlowConsistencies.
+      case M.lookup a releaseFromAcquire of
+        Just r ->
+          And $
+          [ Or
+            [ r' ~> a
+              -- ^ Either the other pair has to come before the the current pair
+            , r ~> a'
+              -- ^ Or it happened afterwards
+            ]
+          | (a', r') <- pairs
+          , a' `S.member` visited'
+          , a' /= a, a' ~/> a, a' ~/> a
+          ] ++ (maybe [] ((:[]) . (~> a)) dr)
+            -- ^ This might be superfluous.
+            ++ (maybe [] ((:[]) . (r ~>)) da)
+        -- If we do not have an release, make sure that we are ordered after all
+        -- other locks.
+        Nothing ->
+          And
+          [ r' ~> a
+          | (a', r') <- pairs, r' ~/> a
+          , a' `S.member` visited'
+          ]
+      where
+        (dr, pairs, da) = lockPairsWithRef M.! ref
 
   writes =
     mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
+
+  locksWithRef =
+    mapOnFst $ onEvent filter (flip (,)) h
+    where
+      filter (Acquire l) = Just l
+      filter (Release l) = Just l
+      filter _ = Nothing
+
+  releaseFromAcquire :: M.Map UE UE
+  releaseFromAcquire =
+    M.fromList . concatMap (^. _2) $ M.elems lockPairsWithRef
+
+  lockPairsWithRef :: M.Map Ref (Maybe UE, [(UE, UE)], Maybe UE)
+  lockPairsWithRef =
+    M.map (simulateReverse pairer (Nothing, [], Nothing)) locksWithRef
+    where
+      pairer u@(Unique i e) s@(dr, pairs, da)=
+        case operation e of
+          Acquire _ ->
+            case dr of
+              Nothing -> (dr, pairs, Just u)
+              Just r -> (Nothing, (u, r):pairs, da)
+          Release _ ->
+            case dr of
+              Nothing -> (Just u, pairs, da)
+              Just r -> error "Can't release the same ref twice in a row."
+          otherwise -> s
+
 
 (~/>) (Unique _ a) (Unique _ b) =
   not (a !< b)
