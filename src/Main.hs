@@ -107,19 +107,19 @@ runcommand args = do
       putStrLn ""
 
   onCommand "deadlocks" $ \events -> do
+    putStrLn "Start!"
     h <- fromEvents <$> P.toListM events
     let candidates = deadlockCandidates h
     forM_ candidates $ \(a, b) -> do
       let s = pp a
-          c = pcontraints h' (a, b)
-          h' = withPair (a, b) h
+          c = pcontraints h (a, b)
       putStrLn $ s ++ L.replicate (55 - length s) ' ' ++ " - " ++ pp b
-      r <- permute h' (a, b)
+      r <- permute h (a, b)
       case r of
         Nothing -> do
           putStrLn "FAIL"
           writeFile ("fail-" ++ show (idx a) ++ "-" ++ show (idx b) ++ ".dot") $
-            (cnf2dot h' . toCNF $ c)
+            (cnf2dot h . toCNF $ c)
         Just t -> do
           putStrLn "SUCCES"
           forM_ t $ \e ->
@@ -129,7 +129,6 @@ runcommand args = do
     h <- fromEvents <$> P.toListM events
     let lia = contraints h
     putStrLn . cnf2dot h $ toCNF lia
-
   where
     withEvents f = do
       case getArg args (argument "events") of
@@ -158,7 +157,7 @@ cnf2dot h cnf = unlines $
       p u ++ " [ shape = box, fontsize = 10, label = \""
           ++ pp (operation event) ++ "\", "
           ++ "pos = \"" ++ show (threadId (thread event) * 200)
-          ++ "," ++ show (- (order event) * 75) ++ "!\" ];"
+          ++ "," ++ show (- id * 75) ++ "!\" ];"
     printAtom color constrain atom =
       case atom of
         AOrder a b -> "\"" ++ p a ++ "\" -> \"" ++ p b ++ "\" "

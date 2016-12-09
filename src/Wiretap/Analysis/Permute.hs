@@ -19,6 +19,7 @@ import           Wiretap.Analysis.LIA
 import           Wiretap.Data.Event
 import           Wiretap.Data.History
 import           Wiretap.Utils
+import           Wiretap.Format.Text
 
 type UE = Unique Event
 
@@ -134,13 +135,13 @@ rwc h =
     update u f = updateDefault ([], []) (over f (u:))
 
 -- | returns the control flow to a single event, this flow jumps threads, with
--- the Join and Fork events.
+-- | the Join and Fork events.
 controlFlow
   :: PartialHistory h
   => h
   -> UE
   -> [UE]
-controlFlow h u@(Unique _ e)=
+controlFlow h u@(Unique _ e) =
   snd $ simulateReverse step (S.singleton (thread e), []) priorEvents
   where
   priorEvents =
@@ -150,14 +151,14 @@ controlFlow h u@(Unique _ e)=
     case operation e' of
       Fork t | t `S.member` threads ->
         (thread e' `S.insert` threads, u':events)
-      Join t | thread e `S.member` threads ->
+      Join t | thread e' `S.member` threads ->
         (t `S.insert` threads, u':events)
-      otherwise | thread e `S.member` threads ->
+      otherwise | thread e' `S.member` threads ->
         (threads, u':events)
       otherwise -> s
 
 -- | For a given event, choose all the reads, and locks, that needs to be
--- consistent for this event to also be consistent.
+-- | consistent for this event to also be consistent.
 controlFlowDependencies
   :: PartialHistory h
   => h
@@ -170,7 +171,7 @@ controlFlowDependencies h u@(Unique _ e) =
       simulateReverse step ([], initialRefs, False) priorEvents
 
     priorEvents =
-      controlFlow h u
+       controlFlow h u
 
     initialRefs =
       case operation e of
@@ -200,80 +201,42 @@ controlFlowDependencies h u@(Unique _ e) =
         otherwise ->
           s
 
--- |
--- controlFlowConsitency :: PartialHistory h
---   => M.Map Thread [UE]
---   -> V.Vector Bool
--- controlFlowConsitency = undefined
-
-{- Control flow consistency. This predicate requires that the history
-is re-playable in the program up to this point, in respect to branches.
--}
-cfc
+controlFlowConsistency
   :: PartialHistory h
-  => UE
+  => [UE]
   -> h
   -> LIA UE
-cfc u@(Unique idx e) h =
-  And [ rc h r | r <- requiredReads ]
+controlFlowConsistency us h =
+  And [ consistent (S.empty) u | u <- us ]
   where
-    requiredReads =
-      filter requiredRead $
-        case branch of
-          Just b ->
-            [ r | r <- reads, b ~/> (r ^. _3) ]
-          Nothing ->
-            reads
+  consistent visited u' =
+    if S.null depends then
+      lc $ S.toAscList visited
+    else
+      And $ onReads readConsitency (S.toList depends)
+    where
+    depends =
+      S.fromAscList (controlFlowDependencies h u') S.\\ visited
 
-    requiredRead (l, v, r) =
-      case v of
-        Object vref ->
-          any (\(ref, u) -> vref == pointer ref && u ~/> r) requiredRefs
-        otherwise ->
-          False
+    visited' =
+      visited `S.union` depends
 
-    (threads, reads, requiredRefs, branch) =
-      simulateReverse step ([thread e], [], [], Nothing) h
-
-    step u@(Unique _ e') s@(ts, rd, rf, b) =
-      if L.elem (thread e') ts then
-        case operation e of
-          Read l v -> over _2 ((l, v, u):) s
-          Request r -> over _3 ((r, u):) s
-          Fork t | L.elem t ts ->
-                   over _1 (t:) s
-          _ -> s
-      else
-        s
-
-{- Read consistency, make sure that the read is reading the same value. -}
-rc
-  :: PartialHistory h
-  => h
-  -> (Location, Value, UE)
-  -> LIA UE
-rc h (l, v, r) =
-  Or
-  [ And
-    [ And
-      [ Or [ w' ~> w, r ~> w']
-      | (_, w') <- writes
-      , w' /= w , w' ~/> w, r ~/> w'
+    readConsitency r (l, v) =
+      Or
+      [ And $ consistent visited' w : w ~> r :
+        [ Or [ w' ~> w, r ~> w']
+        | (_, w') <- rwrites
+        , w' /= w , w' ~/> w, r ~/> w'
+        ]
+      | (v', w) <- rwrites
+      , v' == v , r ~/> w
       ]
-    , And $ if w ~/> r then [w ~> r] else []
-    , cfc w h
-    ]
-  | (v', w) <- writes
-  , v' == v
-  , r ~/> w
-  ]
-  where
-    writes = simulate step [] h
-    step u@(Unique _ e') =
-      case operation e' of
-        Write l' v | l' == l -> ((v, u):)
-        _ -> id
+      where
+        rwrites = writes M.! l
 
+
+  writes =
+    mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
 
 (~/>) (Unique _ a) (Unique _ b) =
   not (a !< b)
@@ -291,7 +254,7 @@ permute h (a, b) = do
 
 pcontraints h (a, b) =
   And $ Eq a b :
-    ([ sc, mhb, lc ] <*> [h])
+    ([ sc, mhb, controlFlowConsistency [a, b]] <*> [h])
 
 contraints
   :: PartialHistory h

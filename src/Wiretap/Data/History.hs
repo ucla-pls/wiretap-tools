@@ -75,3 +75,29 @@ byThread =
   where
   step u@(Unique _ e) =
     updateDefault [] (u:) $ thread e
+
+onReads
+  :: PartialHistory h
+  => (Unique Event -> (Location, Value) -> a)
+  -> h
+  -> [a]
+onReads f =
+  simulateReverse step []
+  where
+    step u =
+      case operation . normal $ u of
+        Read l v -> (f u (l, v):)
+        otherwise -> id
+
+onWrites
+  :: PartialHistory h
+  => (Unique Event -> (Location, Value) -> a)
+  -> h
+  -> [a]
+onWrites f =
+  simulateReverse step []
+  where
+    step u =
+      case operation . normal $ u of
+        Write l v -> (f u (l, v):)
+        otherwise -> id
