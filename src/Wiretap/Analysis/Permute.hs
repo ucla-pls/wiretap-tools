@@ -157,6 +157,22 @@ controlFlow h u@(Unique _ e) =
         (threads, u':events)
       otherwise -> s
 
+-- | Get all refs known by the event at the moment of execution.
+knownRefs (Unique i e) =
+  case operation e of
+    Write l (Object v) ->
+      maybe S.empty S.singleton (ref l) `S.union` S.singleton (Ref v)
+    Read l _ ->
+      maybe S.empty S.singleton (ref l)
+    Acquire r ->
+      S.singleton r
+    Release r ->
+      S.singleton r
+    Request r ->
+      S.singleton r
+    otherwise ->
+      S.empty
+
 -- | For a given event, choose all the reads, and locks, that needs to be
 -- | consistent for this event to also be consistent.
 controlFlowDependencies
@@ -164,30 +180,9 @@ controlFlowDependencies
   => h
   -> UE
   -> [UE]
-controlFlowDependencies h u@(Unique _ e) =
-  dependencies
+controlFlowDependencies h u =
+ simulateReverse step ([], knownRefs u, False) (controlFlow h u)  ^. _1
   where
-    (dependencies, _, _) =
-      simulateReverse step ([], initialRefs, False) priorEvents
-
-    priorEvents =
-       controlFlow h u
-
-    initialRefs =
-      case operation e of
-        Write l (Object v) ->
-          maybe S.empty S.singleton (ref l) `S.union` S.singleton (Ref v)
-        Read l _ ->
-          maybe S.empty S.singleton (ref l)
-        Acquire r ->
-          S.singleton r
-        Release r ->
-          S.singleton r
-        Request r ->
-          S.singleton r
-        otherwise ->
-          S.empty
-
     step u'@(Unique i e') s@(events, refs, branch) =
       case operation e' of
         Read _ _ | branch ->

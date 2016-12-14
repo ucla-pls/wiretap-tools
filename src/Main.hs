@@ -13,6 +13,7 @@ import           Control.Monad
 import           Data.Unique
 
 import qualified Data.List                       as L
+import qualified Data.Set                        as S
 
 import           Pipes
 import qualified Pipes.Prelude                   as P
@@ -121,9 +122,11 @@ runcommand args = do
           writeFile ("fail-" ++ show (idx a) ++ "-" ++ show (idx b) ++ ".dot") $
             (cnf2dot h . toCNF $ c)
         Just t -> do
-          putStrLn "SUCCES"
+          putStrLn "SUCCESS"
           forM_ t $ \e ->
             putStrLn $ ">>> " ++ pp e
+          writeFile ("success-" ++ show (idx a) ++ "-" ++ show (idx b) ++ ".dot") $
+            (cnf2dot t . toCNF $ c)
 
   onCommand "dot" $ \events -> do
     h <- fromEvents <$> P.toListM events
@@ -146,21 +149,24 @@ cnf2dot h cnf = unlines $
   , "graph [overlap=false, splines=true];"
   , "edge [ colorscheme = dark28 ]"
   ]
-  ++ [ unlines $ map printEvent (Wiretap.Data.History.enumerate h)]
+  ++ [ unlines $ zipWith printEvent [0..] (Wiretap.Data.History.enumerate h)]
   ++ [ unlines $ printConjunction color cj
      | (color, cj) <- zip (cycle $ map show [1..8]) cnf
      ]
   ++ [ "}" ]
   where
     p u = "O" ++ show (idx u)
-    printEvent u@(Unique id event) =
+    printEvent id u@(Unique _ event) =
       p u ++ " [ shape = box, fontsize = 10, label = \""
           ++ pp (operation event) ++ "\", "
           ++ "pos = \"" ++ show (threadId (thread event) * 200)
           ++ "," ++ show (- id * 75) ++ "!\" ];"
+
+    events = S.fromList (Wiretap.Data.History.enumerate h)
     printAtom color constrain atom =
       case atom of
-        AOrder a b -> "\"" ++ p a ++ "\" -> \"" ++ p b ++ "\" "
+        AOrder a b | a `S.member` events &&  b `S.member` events ->
+           "\"" ++ p a ++ "\" -> \"" ++ p b ++ "\" "
            ++ case constrain of
                 True -> ";"
                 False ->
@@ -168,6 +174,7 @@ cnf2dot h cnf = unlines $
         AEq a b ->
              "\"" ++ p a ++ "\" -> \"" ++ p b ++ "\"; "
           ++ "\"" ++ p b ++ "\" -> \"" ++ p a ++ "\""
+        otherwise -> ""
 
     printConjunction color [e] =
       [ printAtom "black" True e ]
