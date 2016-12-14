@@ -11,50 +11,53 @@ import Data.Unique
 import Wiretap.Data.Event
 import Wiretap.Data.Program
 
-newtype PP a = PP { item :: a }
+data PP a = PP
+  { program :: Program
+  , item :: a
+  }
 
-pp :: Show (PP a) => a -> String
-pp = show . PP
+pp :: Show (PP a) => Program -> a -> String
+pp p = show . PP p
 
 instance Show (PP Thread) where
-  show (PP (Thread t)) =
+  show (PP p (Thread t)) =
     "t" ++ show t
 
 instance Show (PP Event) where
-  show (PP e) =
+  show (PP p e) =
     let op = show (order e) in
-    pp (thread e) ++ "." ++ (replicate (4 - length op) '0') ++ op ++ " " ++ pp (operation e)
+    pp p (thread e) ++ "." ++ (replicate (4 - length op) '0') ++ op ++ " " ++ pp p (operation e)
 
 instance Show (PP Operation) where
-  show (PP o) =
+  show (PP p o) =
     L.intercalate " " $ case o of
       Synch i-> ["synch", show i]
 
-      Fork t -> ["fork",  pp t]
-      Join t -> ["join", pp t]
+      Fork t -> ["fork",  pp p t]
+      Join t -> ["join", pp p t]
 
-      Request r -> ["request", pp r]
-      Acquire r -> ["acquire", pp r]
-      Release r -> ["release", pp r]
+      Request r -> ["request", pp p r]
+      Acquire r -> ["acquire", pp p r]
+      Release r -> ["release", pp p r]
 
-      Read l v -> ["read", pp l, pp v]
-      Write l v -> ["write", pp l, pp v]
+      Read l v -> ["read", pp p l, pp p v]
+      Write l v -> ["write", pp p l, pp p v]
 
       Begin -> ["begin"]
       End -> ["end"]
 
 instance Show (PP Location) where
-  show (PP l) =
+  show (PP p l) =
     case l of
       Dynamic r f ->
-        pp f ++ "@" ++ pp r
+        pp p r ++ "." ++ pp p f
       Static f ->
-        pp f ++ "@S"
+        pp p f
       Array r i ->
-        pp r ++ "[" ++ show i ++ "]"
+        pp p r ++ "[" ++ show i ++ "]"
 
 instance Show (PP Value) where
-  show (PP v) =
+  show (PP p v) =
     case v of
       Byte v -> "i8!" ++ showHex v ""
       Char v -> show v
@@ -66,17 +69,17 @@ instance Show (PP Value) where
       Object v -> "r!" ++ showHex v ""
 
 instance Show (PP Field) where
-  show (PP f) = show f
+  show (PP p f) = fieldName p f
 
 instance Show (PP Ref) where
-  show (PP (Ref r)) =
+  show (PP p (Ref r)) =
     "r!" ++ showHex r ""
 
 instance Show (PP a) => Show (PP (Unique a)) where
-  show (PP (Unique i e)) =
+  show (PP p (Unique i e)) =
     let s = show i in
-    (replicate (5 - length s) ' ') ++ s ++ " | " ++ pp e
+    (replicate (5 - length s) ' ') ++ s ++ " | " ++ pp p e
 
 instance Show (PP a) => Show (PP [a]) where
-  show (PP as) =
-    L.intercalate "\n" $ map (show . PP) as
+  show (PP p as) =
+    L.intercalate "\n" $ map (pp p) as

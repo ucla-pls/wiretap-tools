@@ -9,6 +9,7 @@ import           System.FilePath
 import           System.IO
 
 import           Control.Monad
+import           Control.Applicative
 
 import           Data.Unique
 
@@ -24,6 +25,7 @@ import           Wiretap.Format.Text
 
 import           Wiretap.Data.Event
 import           Wiretap.Data.History
+import qualified Wiretap.Data.Program as Program
 
 import           Wiretap.Analysis.Lock
 import           Wiretap.Analysis.LIA
@@ -35,76 +37,73 @@ patterns = [docopt|wiretap-tools version 0.1.0.0
 
 Usage:
    wiretap-tools (parse|count|size) [<history>]
-   wiretap-tools (race-candidates|shared-locations|dataraces) [<history>]
-   wiretap-tools (lockset|deadlock-candidates|deadlocks) [<history>]
+   wiretap-tools lockset [-h] [<history>]
+   wiretap-tools dataraces [<history>]
+   wiretap-tools deadlocks [<history>]
    wiretap-tools (dot) [<history>]
-   wiretap-tools (-h | --help | --version)
+   wiretap-tools (--help | --version)
+
+Options:
+-h, --human-readable           Adds more information about execution
+-p PROGRAM, --program PROGRAM  The path to the program information, the default
+                               is the folder of the history if one is declared.
+
 |]
 
 getArgOrExit :: Arguments -> Option -> IO String
 getArgOrExit = getArgOrExitWith patterns
 
 helpNeeded args =
-  args `isPresent` longOption "help" || args `isPresent` shortOption 'h'
+  args `isPresent` longOption "help"
 
 main :: IO ()
 main = do
   args <- parseArgsOrExit patterns =<< getArgs
   when (helpNeeded args) $ exitWithUsage patterns
-  runcommand args
+  runCommand args
 
-runcommand :: Arguments -> IO ()
-runcommand args = do
+runCommand :: Arguments -> IO ()
+runCommand args = do
+
+  program <- getProgram args
+
   onCommand "parse" $ \events -> do
-    runEffect $ for events (lift . print . PP)
+    runEffect $ for events (lift . putStrLn . pp program)
 
-  onCommand "count" $ \events -> do
-    print =<< countEvents events
+  onCommand "count" $ countEvents >=> print
 
-  onCommand "size" $ \events -> do
-    print =<< P.length events
+  onCommand "size" $ P.length >=> print
 
-  onCommand "shared-locations" $ \events -> do
-    a <- sharedLocations . fromEvents <$> P.toListM events
-    forM_ a $ \(l, es) -> do
-      putStrLn $ pp l
-      forM_ es $ \(a, b) -> do
-        putStrLn $ "  A = " ++ pp a
-        putStrLn $ "  B = " ++ pp b
-        putStrLn ""
-
-  onCommand "race-candidates" $ \events -> do
-    es <- raceCandidates . fromEvents <$> P.toListM events
-    forM_ es $ \(a, b) -> do
-      putStrLn $ "A = " ++ pp a
-      putStrLn $ "B = " ++ pp b
-      putStrLn ""
+  onCommand "lockset" $ \events -> do
+    locks <- lockset . fromEvents <$> P.toListM events
+    forM_ locks $ \(e, b) -> do
+      let locks = L.intercalate "," $ map (pp program) b
+      if (args `isPresent` (longOption "human-readable"))
+      then do
+        let s = pp program e
+        putStrLn $ s ++ L.replicate (60 - length s) ' ' ++ " - " ++ locks
+      else
+        putStrLn locks
 
   onCommand "dataraces" $ \events -> do
     h <- fromEvents <$> P.toListM events
     let candidates = raceCandidates h
     forM_ candidates $ \(a, b) -> do
-      let s = pp a
-      putStrLn $ s ++ L.replicate (55 - length s) ' ' ++ " - " ++ pp b
+      let s = pp program a
+      putStrLn $ s ++ L.replicate (55 - length s) ' ' ++ " - " ++ pp program b
       r <- permute h (a, b)
       case r of
         Nothing -> putStrLn "FAIL"
         Just t -> do
-          putStrLn "SUCCES"
+          putStrLn "SUCCESS"
           forM_ t $ \e ->
-            putStrLn $ ">>> " ++ pp e
-
-  onCommand "lockset" $ \events -> do
-    locks <- lockset . fromEvents <$> P.toListM events
-    forM_ locks $ \(e, b) -> do
-      let s = pp e
-      putStrLn $ s ++ L.replicate (60 - length s) ' ' ++ " - " ++ pp b
+            putStrLn $ ">>> " ++ pp program e
 
   onCommand "deadlock-candidates" $ \events -> do
     es <- deadlockCandidates . fromEvents <$> P.toListM events
     forM_ es $ \(a, b) -> do
-      putStrLn $ "A = " ++ pp a
-      putStrLn $ "B = " ++ pp b
+      putStrLn $ "A = " ++ pp program a
+      putStrLn $ "B = " ++ pp program b
       putStrLn ""
 
   onCommand "deadlocks" $ \events -> do
@@ -112,39 +111,47 @@ runcommand args = do
     h <- fromEvents <$> P.toListM events
     let candidates = deadlockCandidates h
     forM_ candidates $ \(a, b) -> do
-      let s = pp a
+      let s = pp program a
           c = pcontraints h (a, b)
-      putStrLn $ s ++ L.replicate (55 - length s) ' ' ++ " - " ++ pp b
+      putStrLn $ s ++ L.replicate (55 - length s) ' ' ++ " - " ++ pp program b
       r <- permute h (a, b)
       case r of
         Nothing -> do
           putStrLn "FAIL"
           writeFile ("fail-" ++ show (idx a) ++ "-" ++ show (idx b) ++ ".dot") $
-            (cnf2dot h . toCNF $ c)
+            (cnf2dot program h . toCNF $ c)
         Just t -> do
           putStrLn "SUCCESS"
           forM_ t $ \e ->
-            putStrLn $ ">>> " ++ pp e
+            putStrLn $ ">>> " ++ pp program e
           writeFile ("success-" ++ show (idx a) ++ "-" ++ show (idx b) ++ ".dot") $
-            (cnf2dot t . toCNF $ c)
+            (cnf2dot program t . toCNF $ c)
 
   onCommand "dot" $ \events -> do
     h <- fromEvents <$> P.toListM events
     let lia = contraints h
-    putStrLn . cnf2dot h $ toCNF lia
+    putStrLn . cnf2dot program h $ toCNF lia
   where
-    withEvents f = do
-      case getArg args (argument "events") of
+    withHistory f = do
+      case getArg args (argument "history") of
         Just events ->
           withFile events ReadMode f
         Nothing ->
           f stdin
     onCommand cmd f =
       when (args `isPresent` command cmd) $ do
-        withEvents (f . readHistory)
+        withHistory (f . readHistory)
 
-cnf2dot :: PartialHistory h => h -> [[LIAAtom (Unique Event)]] -> String
-cnf2dot h cnf = unlines $
+getProgram args =
+  case aProgram <|> fmap takeDirectory aHistory of
+    Just folder -> Program.fromFolder folder
+    Nothing -> return $ Program.empty
+  where
+  aHistory = getArg args $ argument "history"
+  aProgram = getArg args $ argument "program"
+
+cnf2dot :: PartialHistory h => Program.Program -> h -> [[LIAAtom (Unique Event)]] -> String
+cnf2dot program h cnf = unlines $
   [ "digraph {"
   , "graph [overlap=false, splines=true];"
   , "edge [ colorscheme = dark28 ]"
@@ -158,7 +165,7 @@ cnf2dot h cnf = unlines $
     p u = "O" ++ show (idx u)
     printEvent id u@(Unique _ event) =
       p u ++ " [ shape = box, fontsize = 10, label = \""
-          ++ pp (operation event) ++ "\", "
+          ++ pp program (operation event) ++ "\", "
           ++ "pos = \"" ++ show (threadId (thread event) * 200)
           ++ "," ++ show (- id * 75) ++ "!\" ];"
 
