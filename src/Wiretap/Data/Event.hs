@@ -67,6 +67,10 @@ instance Binary Event where
 instance Arbitrary Event where
   arbitrary = Event <$> arbitrary <*> arbitrary <*> arbitrary
 
+instruction :: Program.Program -> Event -> IO Program.Instruction
+instruction p e =
+  Program.findInstruction p (threadId $ thread e) (order e)
+
 prop_EventIsBinary = prop_isBinary :: Event -> Bool
 
 newtype LogEvent = LogEvent
@@ -118,18 +122,26 @@ instance Binary Location where
   put (Array r i) = put r >> put i
   put (Static i) = putInt32be 0 >> put i
   put (Dynamic r i) = put r >> putInt32be (Program.fieldId i)
-  get = {-# SCC get_location #-} do
-    r <- get
-    i <- getInt32be
-    if pointer r == 0
-      then return $ Static (Program.Field i)
-      else return $ Array r (fromIntegral i)
+  get = getArrayLocation
+
+getArrayLocation = do
+  r <- get
+  i <- getInt32be
+  return $ Array r (fromIntegral i)
+
+getFieldLocation = do
+  r <- get
+  f <- Program.Field <$> getInt32be
+  if pointer r == 0
+    then return $ Static f
+    else return $ Dynamic r f
 
 -- TODO Add Dynamic references
 instance Arbitrary Location where
   arbitrary = oneof
     [ Static <$> (Program.Field <$> arbitrary)
     , Array <$> arbitrary <*> arbitrary
+    , Dynamic <$> arbitrary <*> (Program.Field <$> arbitrary)
     ]
 
 prop_LocationIsBinary = prop_isBinary :: Location -> Bool
@@ -225,11 +237,13 @@ data Operation
   | Acquire Ref
   | Release Ref
 
+  | Begin
+  | End
+  | Branch
+
   | Read Location Value
   | Write Location Value
 
-  | Begin
-  | End
   deriving (Show, Eq, Ord)
 
 instance Binary Operation where
@@ -259,12 +273,14 @@ instance Binary Operation where
       put r
 
     Read l v -> do
-      putWord8 $ (getValueId v `shiftL` 4) .|. 6
+      let id = case l of Array _ _ -> 14; otherwise -> 12
+      putWord8 $ (getValueId v `shiftL` 4) .|. id
       put l
       putValue v
 
     Write l v -> do
-      putWord8 $ (getValueId v `shiftL` 4) .|. 7
+      let id = case l of Array _ _ -> 15; otherwise -> 13
+      putWord8 $ (getValueId v `shiftL` 4) .|. id
       put l
       putValue v
 
@@ -382,7 +398,6 @@ drawThread =
   Thread . fromIntegral <$> drawInt32be
 {-# INLINE drawThread #-}
 
-
 getOperation :: Word8 -> Get Operation
 getOperation w =
   case w .&. 0x0f of
@@ -392,10 +407,13 @@ getOperation w =
     3 -> Request <$> get
     4 -> Acquire <$> get
     5 -> Release <$> get
-    6 -> {-# SCC get_operation_read #-} (Read <$> get <*> getValue w)
-    7 -> {-# SCC get_operation_write #-} (Write <$> get <*> getValue w)
-    8 -> return Begin
-    9 -> return End
+    6 -> return Begin
+    7 -> return End
+    8 -> return Branch
+    12 -> Read <$> getFieldLocation <*> getValue w
+    13 -> Write <$> getFieldLocation <*> getValue w
+    14 -> Read <$> getArrayLocation <*> getValue w
+    15 -> Write <$> getArrayLocation <*> getValue w
 
 eventSize :: Word8 -> Int
 eventSize w =
@@ -434,6 +452,7 @@ instance Arbitrary Operation where
     , Write <$> arbitrary <*> arbitrary
     , return Begin
     , return End
+    , return Branch
     ]
 
 prop_OperationIsBinary = prop_isBinary :: Operation -> Bool

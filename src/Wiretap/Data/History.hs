@@ -12,38 +12,39 @@ import qualified Data.Vector        as V
 import           Wiretap.Data.Event
 import           Wiretap.Utils
 
+type UE = Unique Event
 
 newtype History = History
   { toVector :: V.Vector Event
   } deriving (Show)
 
 class PartialHistory h where
-  enumerate :: h -> [Unique Event]
+  enumerate :: h -> [UE]
 
 instance PartialHistory History where
   enumerate =
     byIndex . toList . toVector
 
-instance PartialHistory [Unique Event] where
+instance PartialHistory [UE] where
   enumerate = id
 
-instance PartialHistory (S.Set (Unique Event)) where
+instance PartialHistory (S.Set (UE)) where
   enumerate = S.toAscList
 
 simulate :: PartialHistory h
-  => (Unique Event -> a -> a)
+  => (UE -> a -> a)
   -> a -> h -> a
 simulate f a h =
   foldl' (flip f) a (enumerate h)
 
 simulateReverse :: PartialHistory h
-  => (Unique Event -> a -> a)
+  => (UE -> a -> a)
   -> a -> h -> a
 simulateReverse f a h =
   foldl' (flip f) a (reverse . enumerate $ h)
 
 simulateM :: (PartialHistory h, Monad m)
-  => (Unique Event -> m a)
+  => (UE -> m a)
   -> h -> m [Unique a]
 simulateM f h =
   zipWith (\u e -> const e <$> u) uniques <$> mapM f uniques
@@ -56,12 +57,12 @@ fromEvents events =
   History . V.fromList $ toList events
 
 hfilter :: PartialHistory h
-  => (Unique Event -> Bool) -> h -> [Unique Event]
+  => (UE -> Bool) -> h -> [UE]
 hfilter f =
   filter f . enumerate
 
 withPair :: PartialHistory h
-  => (Unique Event, Unique Event) -> h -> [Unique Event]
+  => (UE, UE) -> h -> [UE]
 withPair (a, b) h =
   case span isNotAB $ enumerate h of
     (xs, ab : ys) ->
@@ -74,7 +75,7 @@ withPair (a, b) h =
 
 byThread :: PartialHistory h
   => h
-  -> M.Map Thread [Unique Event]
+  -> M.Map Thread [UE]
 byThread =
   simulateReverse step M.empty
   where
@@ -84,7 +85,7 @@ byThread =
 onEvent
   :: PartialHistory h
   => (Operation -> Maybe b)
-  -> (Unique Event -> b -> a)
+  -> (UE -> b -> a)
   -> h
   -> [a]
 onEvent g f =
@@ -92,7 +93,7 @@ onEvent g f =
 
 onReads
   :: PartialHistory h
-  => (Unique Event -> (Location, Value) -> a)
+  => (UE -> (Location, Value) -> a)
   -> h
   -> [a]
 onReads = onEvent filter
@@ -101,7 +102,7 @@ onReads = onEvent filter
 
 onWrites
   :: PartialHistory h
-  => (Unique Event -> (Location, Value) -> a)
+  => (UE -> (Location, Value) -> a)
   -> h
   -> [a]
 onWrites = onEvent filter
@@ -110,9 +111,18 @@ onWrites = onEvent filter
 
 onAcquires
   :: PartialHistory h
-  => (Unique Event -> Ref -> a)
+  => (UE -> Ref -> a)
   -> h
   -> [a]
 onAcquires = onEvent filter
   where filter (Acquire r) = Just r
+        filter _ = Nothing
+
+onRequests
+  :: PartialHistory h
+  => (UE -> Ref -> a)
+  -> h
+  -> [a]
+onRequests = onEvent filter
+  where filter (Request r) = Just r
         filter _ = Nothing

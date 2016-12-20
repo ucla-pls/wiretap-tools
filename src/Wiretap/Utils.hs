@@ -99,3 +99,11 @@ defM
   -> m
 defM (Just m) = m
 defM (Nothing) = mempty
+
+splitOn :: Eq a => a -> [a] -> [[a]]
+splitOn a lst =
+  case rest of
+    a': rest -> before : splitOn a rest
+    [] -> [before]
+  where
+    (before, rest) = span (/= a) lst

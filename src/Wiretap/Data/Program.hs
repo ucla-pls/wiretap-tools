@@ -13,29 +13,49 @@ import qualified Data.IntMap     as IM
 import           Data.Maybe
 
 import           System.FilePath
+import qualified Data.ByteString.Lazy  as BL
 
 data Program = Program
   { _fieldNames       :: IM.IntMap String
   , _instructionNames :: IM.IntMap String
+  , _instructionFolder :: FilePath
   }
 
 fromFolder :: FilePath -> IO Program
 fromFolder folder = do
-  fields <- IM.fromAscList . zip [0..] . lines <$> readFile (folder </> "fields.txt")
-  return $ Program { _fieldNames = fields, _instructionNames = IM.empty}
+  fields <- IM.map cleanField <$> intMapFromFile "fields.txt"
+  instructions <- intMapFromFile "instructions.txt"
+  return $ Program
+    { _fieldNames = fields
+    , _instructionNames = instructions
+    , _instructionFolder = folder </> "instructions"
+    }
+  where
+    intMapFromFile f =
+      IM.fromAscList . zip [0..] . lines <$> readFile (folder </> f)
+
+    cleanField = takeWhile (/= ':') . tail . dropWhile (/= '.')
 
 empty :: Program
 empty =
   Program { _fieldNames = IM.empty
           , _instructionNames = IM.empty
+          , _instructionFolder = ""
           }
 
+findInstruction :: Program -> Int32 -> Int32 -> IO Instruction
+findInstruction p tid oid = do
+  bs <- BL.readFile (_instructionFolder p </> show tid)
+  return . decode $ BL.drop (fromIntegral oid * 4) bs
+
 instName :: Program -> Instruction -> String
-instName p i= fromMaybe missing $ IM.lookup (fromIntegral $ instructionId i) (_instructionNames p)
+instName p i =
+  fromMaybe missing $ IM.lookup (fromIntegral $ instructionId i) (_instructionNames p)
   where missing = "<missing-" ++ show (instructionId i) ++ ">"
 
 fieldName :: Program -> Field -> String
-fieldName p f = fromMaybe missing $ IM.lookup (fromIntegral $ fieldId f) (_fieldNames p)
+fieldName p f =
+  fromMaybe missing $ IM.lookup (fromIntegral $ fieldId f) (_fieldNames p)
   where missing = "<missing-" ++ show (fieldId f) ++ ">"
 
 newtype Instruction =

@@ -1,10 +1,23 @@
+{-# LANGUAGE DeriveFunctor    #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TemplateHaskell  #-}
-module Wiretap.Analysis.Permute where
+module Wiretap.Analysis.Permute
+  ( kalhauge
+  , said
+  , free
+  , none
+  , permute
+
+  , Candidate(..)
+  , Proof(..)
+  , Result (..)
+  , failedToProve
+  )
+  where
 
 import           Prelude                hiding (reads)
 
-import           Control.Lens
+import           Control.Lens           hiding (none)
 import           Control.Monad.IO.Class
 import qualified Data.List              as L
 import qualified Data.Map               as M
@@ -18,10 +31,8 @@ import           Data.Unique
 import           Wiretap.Analysis.LIA
 import           Wiretap.Data.Event
 import           Wiretap.Data.History
-import           Wiretap.Utils
 import           Wiretap.Format.Text
-
-type UE = Unique Event
+import           Wiretap.Utils
 
 sc :: PartialHistory h => h -> LIA UE
 sc h =
@@ -265,7 +276,7 @@ controlFlowConsistency us h =
     where
       filter (Acquire l) = Just l
       filter (Release l) = Just l
-      filter _ = Nothing
+      filter _           = Nothing
 
   releaseFromAcquire :: M.Map UE UE
   releaseFromAcquire =
@@ -280,35 +291,65 @@ controlFlowConsistency us h =
           Acquire _ ->
             case dr of
               Nothing -> (dr, pairs, Just u)
-              Just r -> (Nothing, (u, r):pairs, da)
+              Just r  -> (Nothing, (u, r):pairs, da)
           Release _ ->
             case dr of
               Nothing -> (Just u, pairs, da)
-              Just r -> error "Can't release the same ref twice in a row."
+              Just r  -> error "Can't release the same ref twice in a row."
           otherwise -> s
 
 
 (~/>) (Unique _ a) (Unique _ b) =
   not (a !< b)
 
+class Candidate a where
+  toEventPair :: a -> (UE, UE)
+
+data Proof a = Proof
+  { candidate   :: a
+  , constraints :: LIA UE
+  , proof       :: [UE]
+  } deriving Functor
+
+newtype Result a = Result (Either String (Proof a))
+  deriving Functor
+
+
+withProof a c p =
+  Result . Right $ Proof a c p
+failedToProve =
+  Result . Left
+
 {-| permute takes partial history and two events, if the events can be arranged
 next to each other return. -}
 permute
-  :: (PartialHistory h, MonadIO m)
-  => h
-  -> (UE, UE)
-  -> m (Maybe [UE])
-permute h (a, b) = do
-  solution <- solve (enumerate h) (pcontraints h (a, b))
-  return $ withPair (a, b) <$> solution
+  :: (PartialHistory h, MonadIO m, Candidate a)
+  => (h -> (UE, UE) -> LIA UE)
+  -> h
+  -> a
+  -> m (Result a)
+permute prover h a = do
+  solution <- solve (enumerate h) constraints
+  case solution of
+    Just hist ->
+      return $ withProof a constraints hist
+    Nothing ->
+      return $ failedToProve "Could not solve the constraints."
+  where
+    pair = toEventPair a
+    constraints = prover h pair
 
-pcontraints h (a, b) =
+said h (a, b) =
+  And $ Eq a b :
+    ([ sc, mhb, lc, rwc ] <*> [h])
+
+kalhauge h (a, b) =
   And $ Eq a b :
     ([ sc, mhb, controlFlowConsistency [a, b]] <*> [h])
 
-contraints
-  :: PartialHistory h
-  => h
-  -> LIA UE
-contraints h =
-  And $ [ sc, mhb, lc] <*> [h]
+free h (a, b) =
+  And $ Eq a b :
+    ([ sc, mhb ] <*> [h])
+
+none h (a, b) =
+  And [Eq a b]

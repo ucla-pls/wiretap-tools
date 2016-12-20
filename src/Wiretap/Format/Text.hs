@@ -75,6 +75,10 @@ instance Show (PP Ref) where
   show (PP p (Ref r)) =
     "r!" ++ showHex r ""
 
+instance Show (PP Instruction) where
+  show (PP p i) =
+    instName p i
+
 instance Show (PP a) => Show (PP (Unique a)) where
   show (PP p (Unique i e)) =
     let s = show i in

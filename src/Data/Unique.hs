@@ -31,14 +31,14 @@ byIndex :: Traversable t
   -> t (Unique a)
 byIndex = snd . mapAccumL (\i e ->((i + 1), Unique i e)) 0
 
-newtype UMap a = UMap
+newtype UniqueMap a = UniqueMap
   { toIntMap :: M.IntMap a
   } deriving (Show)
 
 {-| Assumes that unique is from to  -}
-fromUniques :: [Unique a] -> UMap a
+fromUniques :: [Unique a] -> UniqueMap a
 fromUniques =
-  UMap . M.fromDistinctAscList . map toPair
+  UniqueMap . M.fromDistinctAscList . map toPair
 
-(!) :: UMap a -> Unique b -> a
+(!) :: UniqueMap a -> Unique b -> a
 m ! u = toIntMap m M.! idx u
