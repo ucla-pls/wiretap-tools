@@ -12,6 +12,9 @@ module Wiretap.Analysis.Permute
   , Proof(..)
   , Result (..)
   , failedToProve
+
+  , (~/>)
+  , (~/~)
   )
   where
 
@@ -302,6 +305,10 @@ controlFlowConsistency us h =
 (~/>) (Unique _ a) (Unique _ b) =
   not (a !< b)
 
+(~/~) a b =
+  a ~/> b && b ~/> a
+
+
 class Candidate a where
   toEventPair :: a -> (UE, UE)
 
@@ -311,14 +318,12 @@ data Proof a = Proof
   , proof       :: [UE]
   } deriving Functor
 
-newtype Result a = Result (Either String (Proof a))
-  deriving Functor
-
+type Result a = Either String (Proof a)
 
 withProof a c p =
-  Result . Right $ Proof a c p
+  Right $ Proof a c p
 failedToProve =
-  Result . Left
+  Left
 
 {-| permute takes partial history and two events, if the events can be arranged
 next to each other return. -}

@@ -87,3 +87,7 @@ instance Show (PP a) => Show (PP (Unique a)) where
 instance Show (PP a) => Show (PP [a]) where
   show (PP p as) =
     L.intercalate "\n" $ map (pp p) as
+
+instance (Show (PP a), Show (PP b)) => Show (PP (a, b)) where
+  show (PP p (a, b)) =
+    show (PP p a , PP p b)

@@ -1,5 +1,8 @@
-{-# LANGUAGE FlexibleContexts #-}
-module Wiretap.Analysis.DataRace where
+module Wiretap.Analysis.DataRace
+  ( raceCandidates
+  , sharedLocations
+  , DataRace (..)
+  ) where
 
 import           Prelude                         hiding (reads)
 
@@ -15,32 +18,10 @@ import           Data.Unique
 import           Control.Monad
 import           Control.Lens
 
-import           Wiretap.Analysis.Lock
+import           Wiretap.Analysis.Permute
 import           Wiretap.Data.History
 import           Wiretap.Utils
 import           Wiretap.Data.Event
-
-
-readwrites :: PartialHistory h
-  => h
-  -> ([(Location, Unique Event)], [(Location, Unique Event)])
-readwrites =
-  simulate acc ([], [])
-  where
-    acc e =
-      case operation . normal $ e of
-        Read l _  -> over _1 ((l,e):)
-        Write l _ -> over _2 ((l,e):)
-        _         -> id
-
-raceCandidates :: PartialHistory h
-  => h
-  -> [(Unique Event, Unique Event)]
-raceCandidates h = candidates
-  -- lockfilter lockset candidates
-  where
-    candidates = concatMap snd . sharedLocations $ h
-    lockset = fst $ locksetSimulation M.empty h
 
 sharedLocations :: PartialHistory h
   => h
@@ -49,18 +30,43 @@ sharedLocations h =
   filter (not . L.null . snd) . map combineLocation $ byLocation writes
   where
     combineLocation (l, ws) =
-      (l, filter teq pairs)
+      (l, filter (uncurry (~/~)) pairs)
       where
         pairs =
           combinations ws ++ readwriteconflicts
         readwriteconflicts =
           crossproduct ws (concat $ M.lookup l readsByLocation)
-        teq (a, b) =
-          thread (normal a) /= thread (normal b)
+
     readsByLocation =
       M.fromDistinctAscList $ byLocation reads
 
     byLocation =
       groupOnFst . L.sortOn fst
 
-    (reads, writes) = readwrites h
+    reads =
+      onReads (\u (l, v) -> (l, u)) h
+
+    writes =
+      onWrites (\u (l, v) -> (l, u)) h
+
+data DataRace = DataRace
+  { location :: Location
+  , a :: UE
+  , b :: UE
+  } deriving (Show, Eq)
+
+instance Ord DataRace where
+  compare = compare `on` toEventPair
+
+instance Candidate DataRace where
+  toEventPair (DataRace l a b) =
+    (a, b)
+
+raceCandidates :: PartialHistory h
+  => h
+  -> [DataRace]
+raceCandidates =
+  concatMap toDataRaces . sharedLocations
+  where
+    toDataRaces (l, events) =
+      map (uncurry $ DataRace l) events

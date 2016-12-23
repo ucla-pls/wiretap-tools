@@ -1,6 +1,8 @@
 module Wiretap.Analysis.Lock
   ( deadlockCandidates
   , locksetSimulation
+  , locksetFilter
+  , lockset
   )
 where
 
@@ -19,6 +21,8 @@ import           Control.Lens
 import           Control.Monad
 import           Control.Monad.State
 import           Data.Foldable
+
+import           Data.Function (on)
 
 -- | Lockset simulation, walks over a history and calculates the lockset
 -- | of each event. The function produces a tuple of an assignment a lockset
@@ -56,7 +60,7 @@ locksetSimulation state history =
 
 sharedLocks :: UniqueMap [(Ref, UE)] -> UE -> UE -> [(Ref, UE)]
 sharedLocks u a b =
-  L.intersect (u ! a) (u ! b)
+  L.intersectBy ((==) `on` fst) (u ! a) (u ! b)
 
 locksetFilter
   :: (Candidate a, PartialHistory h)

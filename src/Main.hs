@@ -41,9 +41,9 @@ patterns = [docopt|wiretap-tools version 0.1.0.0
 
 Usage:
    wiretap-tools (parse|count|size) [<history>]
-   wiretap-tools lockset [-h] [<history>]
-   wiretap-tools dataraces [-hpfo] [<history>]
-   wiretap-tools deadlocks [-hpfo] [<history>]
+   wiretap-tools lockset [-vh] [<history>]
+   wiretap-tools dataraces [options] [<history>]
+   wiretap-tools deadlocks [options] [<history>]
    wiretap-tools (--help | --version)
 
 Options:
@@ -54,7 +54,9 @@ Options:
                                can be added seperated by commas. See filters.
 -p PROVER, --prover PROVER     For use in a candidate analysis, if no prover is provided, un
                                verified candidates are produced.
--o OUT, --proof OUT            Produces the proof in the following directory [ default : ./_proof].
+-o OUT, --proof OUT            Produces the proof in the following directory
+
+-v, --verbose                  Produce verbose outputs
 
 Filters:
 Filters are applicable to dataraces and deadlock analyses.
@@ -101,23 +103,63 @@ runCommand args = do
   onCommand "dataraces" $ \events -> do
     histories <- chuncks events
     forM_ histories $ \history -> do
-      let filters = getFilters aFilter history
-      let proofs = proveCandidates id history . L.sort $ raceCandidates history
-      forM_ proofs $ \(c, lia, h') ->
-        printDataRace program c
+      let filters = getFilters aFilters history
+          candidates = L.sort $ raceCandidates history
+      forM_ candidates $ \c -> do
+        proof <- case applyFilters c filters of
+          Right c -> do
+            prove aProver history (c)
+          Left msg ->
+            return $ Left msg
+        case proof of
+          Right (Proof _ constraints history') -> do
+            printDataRace program c
+            case aProof of
+              Just folder -> do
+                createDirectoryIfMissing True folder
+                let (Unique ia a, Unique ib b) = toEventPair c
+                withFile (folder </> (show ia) ++ "-" ++ show ib ++ ".hist") WriteMode $ \h ->
+                  runEffect $ each history' >-> P.map normal >-> writeHistory h
+              Nothing -> return ()
+          Left msg -> do
+            when aVerbose $ do
+              hPutStrLn stderr "Couldn't prove candidate"
+              hPrint stderr c
+              hPutStrLn stderr "The reason was:"
+              hPutStrLn stderr msg
 
   where
+    getFilters :: Candidate a => [String] -> History -> [a -> Either String a]
     getFilters aFilter history =
-      map aFilter go
+      map go aFilter
       where
         go "lockset" =
-        go name = error $ "Unknown filter " ++ name
+          locksetFilter history
+        go "all" =
+          const $ Left "Rejected"
+        go name =
+          error $ "Unknown filter " ++ name
 
-    printDataRace program (a, b) =
+    applyFilters :: Candidate a => a -> [a -> Either String a] -> Either String a
+    applyFilters c =
+      L.foldl' (>>=) (pure c)
+
+    prove name =
+      permute prover
+      where
+        prover =
+          case name of
+            "said" -> said
+            "kalhauge" -> kalhauge
+            "free" -> free
+            "none" -> none
+            otherwise -> error $ "Unknown prover: '" ++ name ++ "'"
+
+    printDataRace program (DataRace l a b) =
       if aHumanReadable
         then do
           let [ap, bp] = map (pp program) [a, b]
-          putStrLn $ padStr ap ' ' 60 ++ bp
+          putStrLn $ padStr ap ' ' 60 ++ padStr bp ' ' 60 ++ pp program l
         else do
           datarace <- mapM (instruction program . normal) [a, b]
           putStrLn . L.intercalate " " . L.sort $ map (pp program) datarace
@@ -147,52 +189,13 @@ runCommand args = do
         Just folder -> Program.fromFolder folder
         Nothing -> return $ Program.empty
 
-    proveCandidate
-      :: (PartialHistory h, Candidate a)
-      => h
-      -> a
-      -> m (Result a)
-    proveCandidate h candidate =
-      case candidate' of
-        Right candidate' ->
-          proveWithProver aProver h candidate'
-        Left message ->
-          return $ failedToProve message
-      where
-        candidate' = L.foldl (\b a -> b >>= applyFilter h a) (Right candidate) aFilters
 
-    proveWithProver name =
-      permute prover
-      where
-        prover =
-          case name of
-            "said" -> said
-            "kalhauge" -> kalhauge
-            "free" -> free
-            "none" -> none
-            otherwise -> error $ "Unknown prover: '" ++ name ++ "'"
-
-    applyFilter
-      :: (PartialHistory h, Candidate a)
-      => h
-      -> String
-      -> a
-      -> Either String a
-    applyFilter h name candidate =
-      case name of
-        "lockset" ->
-          if seperateLocks (lockMap h) . toEventPair candidate then
-            Right candidate
-          else
-            Left $ "lockset : Candidate had overlapping locksets."
-        otherwise ->
-          error $ "Unknown filter: ''" ++ name ++ "'"
-
-
+    aVerbose = isPresent args $ (longOption "verbose")
     aHistory = getArg args $ argument "history"
     aProgram = getArg args $ argument "program"
     aFilters = fromMaybe [] $ splitOn ',' <$> getArg args (longOption "filter")
     aProver = getArgWithDefault args "kalhauge" (longOption "prover")
+    aProof = getArg args $ longOption "proof"
     aHumanReadable = args `isPresent` longOption "human-readable"
 
     padStr p char size =
