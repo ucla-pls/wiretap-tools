@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes       #-}
@@ -17,6 +18,7 @@ import           Data.Unique
 
 import qualified Data.List                       as L
 import qualified Data.Set                        as S
+import qualified Data.Map                        as M
 import           Data.Maybe
 
 import           Pipes
@@ -32,7 +34,7 @@ import           Wiretap.Data.History
 import qualified Wiretap.Data.Program as Program
 
 import           Wiretap.Analysis.Lock
-import           Wiretap.Analysis.LIA
+import           Wiretap.Analysis.LIA  hiding ((~>))
 import           Wiretap.Analysis.DataRace
 import           Wiretap.Analysis.Permute
 
@@ -75,14 +77,14 @@ main = do
     Right args -> do
       when (helpNeeded args) $ exitWithUsage patterns
       runCommand args
-    Left err -> do
+    Left err ->
       exitWithUsageMessage patterns (show err)
 
 runCommand :: Arguments -> IO ()
 runCommand args = do
   program <- getProgram
 
-  onCommand "parse" $ \events -> do
+  onCommand "parse" $ \events ->
     runEffect $ for events $ \e -> do
       i <- lift (instruction program e)
       let estr = pp program e
@@ -100,38 +102,91 @@ runCommand args = do
     locks <- lockset . fromEvents <$> P.toListM events
     forM_ locks $ printLockset program . over _2 (L.intercalate "," . map (pp program))
 
-  onCommand "dataraces" $ \events -> do
-    histories <- chuncks events
-    forM_ histories $ \history -> do
-      let filters = getFilters aFilters history
-          candidates = L.sort $ raceCandidates history
-      forM_ candidates $ \c -> do
-        proof <- case applyFilters c filters of
-          Right c -> do
-            prove aProver history (c)
-          Left msg ->
-            return $ Left msg
-        case proof of
-          Right (Proof _ constraints history') -> do
-            printDataRace program c
-            case aProof of
-              Just folder -> do
-                createDirectoryIfMissing True folder
-                let (Unique ia a, Unique ib b) = toEventPair c
-                withFile (folder </> (show ia) ++ "-" ++ show ib ++ ".hist") WriteMode $ \h ->
-                  runEffect $ each history' >-> P.map normal >-> writeHistory h
-              Nothing -> return ()
-          Left msg -> do
-            when aVerbose $ do
-              hPutStrLn stderr "Couldn't prove candidate"
-              hPrint stderr c
-              hPutStrLn stderr "The reason was:"
-              hPutStrLn stderr msg
+  onCommand "dataraces" $
+    findCandidates raceCandidates dataRaceToString
 
+  onCommand "deadlocks" $
+    findCandidates (fst . deadlockCandidates M.empty) deadlockToString
   where
-    getFilters :: Candidate a => [String] -> History -> [a -> Either String a]
-    getFilters aFilter history =
-      map go aFilter
+
+    dataRaceToString = show
+    deadlockToString = show
+
+    filterCandidate
+      :: Candidate a
+      => (a -> String)
+      -> [a -> Either String a]
+      -> a
+      -> Producer a IO ()
+    filterCandidate toString filters c =
+      case applyFilters c filters of
+        Right c -> yield c
+        Left msg ->
+          lift $ when aVerbose $ do
+            hPutStrLn stderr "Filtered candidate away:"
+            hPrint stderr $ toString c
+            hPutStrLn stderr "The reason was:"
+            hPutStrLn stderr msg
+
+    proveCandidate
+      :: (Candidate a, PartialHistory h)
+      => (a -> String)
+      -> h
+      -> a
+      -> Producer (Proof a) IO ()
+    proveCandidate toString h c = do
+      p <- lift $ prove aProver h c
+      case p of
+        Right p -> yield p
+        Left msg -> lift $
+          when aVerbose $ do
+            hPutStrLn stderr "Couldn't prove candidate"
+            hPrint stderr $ toString c
+            hPutStrLn stderr "The reason was:"
+            hPutStrLn stderr msg
+
+    printProofs
+      :: Candidate a
+      => (a -> String)
+      -> Proof a
+      -> Effect IO ()
+    printProofs toString (Proof c constraints history) = lift $ do
+      putStrLn $ toString c
+      case aProof of
+        Just folder -> do
+          createDirectoryIfMissing True folder
+          let (Unique ia a, Unique ib b) = toEventPair c
+          withFile (folder </> show ia ++ "-" ++ show ib ++ ".hist") WriteMode $ \h ->
+            runEffect $ each history >-> P.map normal >-> writeHistory h
+        Nothing ->
+          return ()
+
+    findCandidates
+      :: Candidate a
+      => (forall h. PartialHistory h => h -> [a])
+         -- ^ A function that can inspect a partial history and find candidates
+      -> (a -> String) -- ^ A function that can print the candidates
+      -> Producer Event IO ()
+      -> IO ()
+    findCandidates f toString events = do
+      runEffect $ for (chunck events) findCandidatesInChunk
+      where
+        findCandidatesInChunk :: [UE] -> Effect IO ()
+        findCandidatesInChunk history =
+          for (each . f $ history) $
+            filterCandidate toString (getFilters history)
+            ~> proveCandidate toString history
+            ~> printProofs toString
+
+
+    chunck :: Producer Event IO () -> Producer [UE] IO ()
+    chunck events = do
+      h <- lift $ fromEvents <$> P.toListM events
+      yield $ Wiretap.Data.History.enumerate h
+
+    getFilters :: (Candidate a, PartialHistory h) => h -> [a -> Either String a]
+    getFilters history =
+      map go aFilters
       where
         go "lockset" =
           locksetFilter history
@@ -153,7 +208,7 @@ runCommand args = do
             "kalhauge" -> kalhauge
             "free" -> free
             "none" -> none
-            otherwise -> error $ "Unknown prover: '" ++ name ++ "'"
+            _ -> error $ "Unknown prover: '" ++ name ++ "'"
 
     printDataRace program (DataRace l a b) =
       if aHumanReadable
@@ -162,35 +217,32 @@ runCommand args = do
           putStrLn $ padStr ap ' ' 60 ++ padStr bp ' ' 60 ++ pp program l
         else do
           datarace <- mapM (instruction program . normal) [a, b]
-          putStrLn . L.intercalate " " . L.sort $ map (pp program) datarace
+          putStrLn . unwords . L.sort $ map (pp program) datarace
 
-    printLockset program (e, locks) | aHumanReadable = do
+    printLockset program (e, locks) | aHumanReadable =
       putStrLn $ padStr (pp program e) ' ' 60 ++ " - " ++ locks
     printLockset program (e, locks) =
       putStrLn locks
 
-    chuncks events = do
-      chunck <- fromEvents <$> P.toListM events
-      return [chunck]
-
-    withHistory f = do
-      case getArg args (argument "history") of
+    withHistory :: (Handle -> IO ()) -> IO ()
+    withHistory f =
+      case aHistory of
         Just events ->
           withFile events ReadMode f
         Nothing ->
           f stdin
 
+    onCommand :: String -> (Producer Event IO () -> IO ()) -> IO ()
     onCommand cmd f =
-      when (args `isPresent` command cmd) $ do
+      when (args `isPresent` command cmd) $
         withHistory (f . readHistory)
 
     getProgram =
       case aProgram <|> fmap takeDirectory aHistory of
         Just folder -> Program.fromFolder folder
-        Nothing -> return $ Program.empty
+        Nothing -> return Program.empty
 
-
-    aVerbose = isPresent args $ (longOption "verbose")
+    aVerbose = isPresent args $ longOption "verbose"
     aHistory = getArg args $ argument "history"
     aProgram = getArg args $ argument "program"
     aFilters = fromMaybe [] $ splitOn ',' <$> getArg args (longOption "filter")
@@ -226,14 +278,11 @@ cnf2dot program h cnf = unlines $
       case atom of
         AOrder a b | a `S.member` events &&  b `S.member` events ->
            "\"" ++ p a ++ "\" -> \"" ++ p b ++ "\" "
-           ++ case constrain of
-                True -> ";"
-                False ->
-                  "[ style=dashed, color=\"" ++ color ++ "\"];"
+           ++ if constrain then ";" else "[ style=dashed, color=\"" ++ color ++ "\"];"
         AEq a b ->
              "\"" ++ p a ++ "\" -> \"" ++ p b ++ "\"; "
           ++ "\"" ++ p b ++ "\" -> \"" ++ p a ++ "\""
-        otherwise -> ""
+        _ -> ""
 
     printConjunction color [e] =
       [ printAtom "black" True e ]

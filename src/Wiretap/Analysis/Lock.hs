@@ -110,10 +110,10 @@ instance Candidate Deadlock where
     (request . a $ dl, request . b $ dl)
 
 deadlockCandidates :: PartialHistory h
-  => h
-  -> M.Map Thread [(Ref, UE)]
+  => M.Map Thread [(Ref, UE)]
+  -> h
   -> ([Deadlock], M.Map Thread [(Ref, UE)])
-deadlockCandidates h state =
+deadlockCandidates state h =
   (catMaybes $ L.map getDeadlock pairs, state')
   where
     pairs = combinations $ onRequests (,) h
