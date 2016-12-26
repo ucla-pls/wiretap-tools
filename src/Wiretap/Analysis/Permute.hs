@@ -315,7 +315,7 @@ class Candidate a where
 data Proof a = Proof
   { candidate   :: a
   , constraints :: LIA UE
-  , proof       :: [UE]
+  , evidence   :: [UE]
   } deriving Functor
 
 type Result a = Either String (Proof a)

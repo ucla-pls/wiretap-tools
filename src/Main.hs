@@ -1,41 +1,41 @@
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes       #-}
+{-# LANGUAGE RankNTypes        #-}
 module Main where
 
 import           System.Console.Docopt
 import           System.Directory
-import           System.Environment              (getArgs)
+import           System.Environment        (getArgs)
 import           System.FilePath
 import           System.IO
 
-import           Control.Monad
-import           Control.Lens  (over, _2)
 import           Control.Applicative
+import           Control.Lens              (over, _2)
+import           Control.Monad
 
 import           Data.Unique
 
-import qualified Data.List                       as L
-import qualified Data.Set                        as S
-import qualified Data.Map                        as M
+import qualified Data.List                 as L
+import qualified Data.Map                  as M
 import           Data.Maybe
+import qualified Data.Set                  as S
 
 import           Pipes
-import qualified Pipes.Prelude                   as P
+import qualified Pipes.Prelude             as P
 
-import           Wiretap.Utils
 import           Wiretap.Analysis.Count
 import           Wiretap.Format.Binary
 import           Wiretap.Format.Text
+import           Wiretap.Utils
 
 import           Wiretap.Data.Event
 import           Wiretap.Data.History
-import qualified Wiretap.Data.Program as Program
+import qualified Wiretap.Data.Program      as Program
 
-import           Wiretap.Analysis.Lock
-import           Wiretap.Analysis.LIA  hiding ((~>))
 import           Wiretap.Analysis.DataRace
+import           Wiretap.Analysis.LIA      hiding ((~>))
+import           Wiretap.Analysis.Lock
 import           Wiretap.Analysis.Permute
 
 patterns :: Docopt
@@ -62,7 +62,20 @@ Options:
 
 Filters:
 Filters are applicable to dataraces and deadlock analyses.
+
+  lockset:   Remove all candidates with shared locks.
+  all:       Rejects all candidates
 |]
+
+data Config = Config
+  { verbose       :: Bool
+  , prover        :: String
+  , filters       :: [String]
+  , proof         :: Maybe FilePath
+  , program       :: Maybe FilePath
+  , history       :: Maybe FilePath
+  , humanReadable :: Bool
+  } deriving (Show, Read)
 
 getArgOrExit :: Arguments -> Option -> IO String
 getArgOrExit = getArgOrExitWith patterns
@@ -76,18 +89,40 @@ main = do
   case args of
     Right args -> do
       when (helpNeeded args) $ exitWithUsage patterns
-      runCommand args
+      config <- readConfig args
+      runCommand args config
     Left err ->
       exitWithUsageMessage patterns (show err)
 
-runCommand :: Arguments -> IO ()
-runCommand args = do
-  program <- getProgram
+readConfig :: Arguments -> IO Config
+readConfig args = do
+  return $ Config
+    { verbose = isPresent args $ longOption "verbose"
+    , filters = fromMaybe [] $ splitOn ',' <$> getArg args (longOption "filter")
+    , prover = getArgWithDefault args "kalhauge" (longOption "prover")
+    , proof = getLongOption "proof"
+    , program = getLongOption "program"
+    , history = getLongOption "history"
+    , humanReadable = args `isPresent` longOption "human-readable"
+    }
+  where
+    getLongOption = getArg args . longOption
+    getArgument = getArg args . longOption
+    aHistory = getArg args $ argument "history"
+
+
+runCommand :: Arguments -> Config -> IO ()
+runCommand args config = do
+  program <- getProgram config
+
+  let
+    pprint :: Show (PP a) => a -> String
+    pprint = pp program
 
   onCommand "parse" $ \events ->
     runEffect $ for events $ \e -> do
       i <- lift (instruction program e)
-      let estr = pp program e
+      let estr = pprint e
       lift . putStrLn $
         estr ++ L.replicate (80 - length estr) ' '
              ++ " - " ++ Program.instName program i
@@ -100,133 +135,38 @@ runCommand args = do
 
   onCommand "lockset" $ \events -> do
     locks <- lockset . fromEvents <$> P.toListM events
-    forM_ locks $ printLockset program . over _2 (L.intercalate "," . map (pp program))
+    forM_ locks $ printLockset pprint . over _2 (L.intercalate "," . map pprint)
 
   onCommand "dataraces" $
-    findCandidates raceCandidates dataRaceToString
+    proveCandidates config (each . raceCandidates) dataRaceToString
 
   onCommand "deadlocks" $
-    findCandidates (fst . deadlockCandidates M.empty) deadlockToString
+    proveCandidates config (each . fst . deadlockCandidates M.empty) deadlockToString
+
   where
+    getProgram config =
+      maybe (return Program.empty) (Program.fromFolder) $
+        program config <|> fmap takeDirectory (history config)
 
     dataRaceToString = show
     deadlockToString = show
 
-    filterCandidate
-      :: Candidate a
-      => (a -> String)
-      -> [a -> Either String a]
-      -> a
-      -> Producer a IO ()
-    filterCandidate toString filters c =
-      case applyFilters c filters of
-        Right c -> yield c
-        Left msg ->
-          lift $ when aVerbose $ do
-            hPutStrLn stderr "Filtered candidate away:"
-            hPrint stderr $ toString c
-            hPutStrLn stderr "The reason was:"
-            hPutStrLn stderr msg
+    printDataRace program (DataRace l a b) | humanReadable config =
+      putStrLn $ padStr ap ' ' 60 ++ padStr bp ' ' 60 ++ pp program l
+      where [ap, bp] = map (pp program) [a, b]
 
-    proveCandidate
-      :: (Candidate a, PartialHistory h)
-      => (a -> String)
-      -> h
-      -> a
-      -> Producer (Proof a) IO ()
-    proveCandidate toString h c = do
-      p <- lift $ prove aProver h c
-      case p of
-        Right p -> yield p
-        Left msg -> lift $
-          when aVerbose $ do
-            hPutStrLn stderr "Couldn't prove candidate"
-            hPrint stderr $ toString c
-            hPutStrLn stderr "The reason was:"
-            hPutStrLn stderr msg
+    printDataRace program (DataRace l a b) = do
+      datarace <- mapM (instruction program . normal) [a, b]
+      putStrLn . unwords . L.sort $ map (pp program) datarace
 
-    printProofs
-      :: Candidate a
-      => (a -> String)
-      -> Proof a
-      -> Effect IO ()
-    printProofs toString (Proof c constraints history) = lift $ do
-      putStrLn $ toString c
-      case aProof of
-        Just folder -> do
-          createDirectoryIfMissing True folder
-          let (Unique ia a, Unique ib b) = toEventPair c
-          withFile (folder </> show ia ++ "-" ++ show ib ++ ".hist") WriteMode $ \h ->
-            runEffect $ each history >-> P.map normal >-> writeHistory h
-        Nothing ->
-          return ()
-
-    findCandidates
-      :: Candidate a
-      => (forall h. PartialHistory h => h -> [a])
-         -- ^ A function that can inspect a partial history and find candidates
-      -> (a -> String) -- ^ A function that can print the candidates
-      -> Producer Event IO ()
-      -> IO ()
-    findCandidates f toString events = do
-      runEffect $ for (chunck events) findCandidatesInChunk
-      where
-        findCandidatesInChunk :: [UE] -> Effect IO ()
-        findCandidatesInChunk history =
-          for (each . f $ history) $
-            filterCandidate toString (getFilters history)
-            ~> proveCandidate toString history
-            ~> printProofs toString
-
-
-    chunck :: Producer Event IO () -> Producer [UE] IO ()
-    chunck events = do
-      h <- lift $ fromEvents <$> P.toListM events
-      yield $ Wiretap.Data.History.enumerate h
-
-    getFilters :: (Candidate a, PartialHistory h) => h -> [a -> Either String a]
-    getFilters history =
-      map go aFilters
-      where
-        go "lockset" =
-          locksetFilter history
-        go "all" =
-          const $ Left "Rejected"
-        go name =
-          error $ "Unknown filter " ++ name
-
-    applyFilters :: Candidate a => a -> [a -> Either String a] -> Either String a
-    applyFilters c =
-      L.foldl' (>>=) (pure c)
-
-    prove name =
-      permute prover
-      where
-        prover =
-          case name of
-            "said" -> said
-            "kalhauge" -> kalhauge
-            "free" -> free
-            "none" -> none
-            _ -> error $ "Unknown prover: '" ++ name ++ "'"
-
-    printDataRace program (DataRace l a b) =
-      if aHumanReadable
-        then do
-          let [ap, bp] = map (pp program) [a, b]
-          putStrLn $ padStr ap ' ' 60 ++ padStr bp ' ' 60 ++ pp program l
-        else do
-          datarace <- mapM (instruction program . normal) [a, b]
-          putStrLn . unwords . L.sort $ map (pp program) datarace
-
-    printLockset program (e, locks) | aHumanReadable =
-      putStrLn $ padStr (pp program e) ' ' 60 ++ " - " ++ locks
-    printLockset program (e, locks) =
+    printLockset pprint (e, locks) | humanReadable config =
+      putStrLn $ padStr (pprint e) ' ' 60 ++ " - " ++ locks
+    printLockset pprint (e, locks) =
       putStrLn locks
 
     withHistory :: (Handle -> IO ()) -> IO ()
     withHistory f =
-      case aHistory of
+      case history config of
         Just events ->
           withFile events ReadMode f
         Nothing ->
@@ -237,22 +177,82 @@ runCommand args = do
       when (args `isPresent` command cmd) $
         withHistory (f . readHistory)
 
-    getProgram =
-      case aProgram <|> fmap takeDirectory aHistory of
-        Just folder -> Program.fromFolder folder
-        Nothing -> return Program.empty
-
-    aVerbose = isPresent args $ longOption "verbose"
-    aHistory = getArg args $ argument "history"
-    aProgram = getArg args $ argument "program"
-    aFilters = fromMaybe [] $ splitOn ',' <$> getArg args (longOption "filter")
-    aProver = getArgWithDefault args "kalhauge" (longOption "prover")
-    aProof = getArg args $ longOption "proof"
-    aHumanReadable = args `isPresent` longOption "human-readable"
-
     padStr p char size =
       p ++ L.replicate (size - length p) char
 
+proveCandidates
+  :: (Candidate a, MonadIO m)
+  => Config
+  -> (forall h. PartialHistory h => h -> Producer a m ())
+  -> (a -> String)
+  -> Producer Event m ()
+  -> m ()
+proveCandidates config generator toString events = do
+  runEffect $ for (chunck events) chunckProver
+  where
+    chunckProver history =
+      for (generator history) $
+       filterCandidate (getFilters history)
+       ~> proveCandidate history
+       ~> printProofs
+
+    filterCandidate filters c =
+      case applyFilters c filters of
+        Right c -> yield c
+        Left msg ->
+          liftIO $ when (verbose config) $ do
+            hPutStrLn stderr "Filtered candidate away:"
+            hPrint stderr $ toString c
+            hPutStrLn stderr "The reason was:"
+            hPutStrLn stderr msg
+
+    proveCandidate h c = do
+      p <- lift $ prove h c
+      case p of
+        Right p -> yield p
+        Left msg -> liftIO $
+          when (verbose config) $ do
+            hPutStrLn stderr "Couldn't prove candidate"
+            hPrint stderr $ toString c
+            hPutStrLn stderr "The reason was:"
+            hPutStrLn stderr msg
+
+    printProofs (Proof c constraints history) = liftIO $ do
+      putStrLn $ toString c
+      case proof config of
+        Just folder -> do
+          createDirectoryIfMissing True folder
+          let (Unique ia a, Unique ib b) = toEventPair c
+          withFile (folder </> show ia ++ "-" ++ show ib ++ ".hist") WriteMode $ \h ->
+            runEffect $ each history >-> P.map normal >-> writeHistory h
+        Nothing ->
+          return ()
+
+    getFilters history =
+      map go (filters config)
+      where
+        go "lockset" =
+          locksetFilter history
+        go "all" =
+          const $ Left "Rejected"
+        go name =
+          error $ "Unknown filter " ++ name
+
+    applyFilters c =
+      L.foldl' (>>=) (pure c)
+
+    prove =
+      permute $
+        case (prover config) of
+          "said"     -> said
+          "kalhauge" -> kalhauge
+          "free"     -> free
+          "none"     -> none
+          name       -> error $ "Unknown prover: '" ++ name ++ "'"
+
+    chunck events = do
+      h <- lift $ fromEvents <$> P.toListM events
+      yield $ Wiretap.Data.History.enumerate h
 
 cnf2dot :: PartialHistory h => Program.Program -> h -> [[LIAAtom (Unique Event)]] -> String
 cnf2dot program h cnf = unlines $
@@ -266,10 +266,11 @@ cnf2dot program h cnf = unlines $
      ]
   ++ [ "}" ]
   where
+    pprint = pp program
     p u = "O" ++ show (idx u)
     printEvent id u@(Unique _ event) =
       p u ++ " [ shape = box, fontsize = 10, label = \""
-          ++ pp program (operation event) ++ "\", "
+          ++ pprint (operation event) ++ "\", "
           ++ "pos = \"" ++ show (threadId (thread event) * 200)
           ++ "," ++ show (- id * 75) ++ "!\" ];"
 

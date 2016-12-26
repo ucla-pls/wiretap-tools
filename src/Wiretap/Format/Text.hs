@@ -1,6 +1,10 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
-module Wiretap.Format.Text where
+module Wiretap.Format.Text
+  ( pp
+  , PP
+  )
+where
 
 import Numeric
 
