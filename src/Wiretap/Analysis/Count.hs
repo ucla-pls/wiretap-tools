@@ -6,13 +6,12 @@ module Wiretap.Analysis.Count
   , Counter (..)
   ) where
 
-import Text.Printf
-import qualified Data.Foldable as F
-import Wiretap.Data.Event
+import           Prelude            hiding (reads, sum)
 
 import           Pipes
-import qualified Pipes.Prelude as P
-import Prelude hiding (reads)
+import qualified Pipes.Prelude      as P
+
+import           Wiretap.Data.Event
 
 -- | Counter, counts all the occurrences of each event.
 
@@ -27,10 +26,11 @@ data Counter = Counter
   , writes   :: !Int
   , begins   :: !Int
   , ends     :: !Int
+  , branches :: !Int
   } deriving (Show)
 
 instance Monoid Counter where
-  mempty = Counter 0 0 0 0 0 0 0 0 0 0
+  mempty = Counter 0 0 0 0 0 0 0 0 0 0 0
   mappend a b = Counter
     { synchs   = sum synchs
     , acquires = sum acquires
@@ -42,12 +42,10 @@ instance Monoid Counter where
     , writes   = sum writes
     , begins   = sum begins
     , ends     = sum ends
+    , branches = sum branches
     }
     where
       sum f = f a + f b
-
-fromEvent :: Event -> Counter
-fromEvent = incrCounter mempty
 
 incrCounter :: Counter -> Event -> Counter
 incrCounter c Event {operation=o} =
@@ -62,6 +60,7 @@ incrCounter c Event {operation=o} =
    Write _ _ -> c { writes   = writes c + 1 }
    Begin     -> c { begins   = begins c + 1 }
    End       -> c { ends     = ends c + 1 }
+   Branch    -> c { branches = branches c + 1 }
 
 counterHeader :: [String]
 counterHeader =
@@ -75,6 +74,7 @@ counterHeader =
   , "writes"
   , "begins"
   , "ends"
+  , "branches"
   ]
 
 counterToRow :: Counter -> [String]
@@ -90,8 +90,8 @@ counterToRow c =
     , writes
     , begins
     , ends
+    , branches
     ] <*> [c]
-
 
 countEvents :: Monad m => Producer Event m () -> m Counter
 countEvents = P.fold incrCounter mempty id

@@ -18,7 +18,7 @@ import qualified Data.ByteString.Lazy  as BL
 data Program = Program
   { _fieldNames       :: IM.IntMap String
   , _instructionNames :: IM.IntMap String
-  , _instructionFolder :: FilePath
+  , _instructionFolder :: Maybe FilePath
   }
 
 fromFolder :: FilePath -> IO Program
@@ -28,7 +28,7 @@ fromFolder folder = do
   return $ Program
     { _fieldNames = fields
     , _instructionNames = instructions
-    , _instructionFolder = folder </> "instructions"
+    , _instructionFolder = Just $ folder </> "instructions"
     }
   where
     intMapFromFile f =
@@ -40,13 +40,17 @@ empty :: Program
 empty =
   Program { _fieldNames = IM.empty
           , _instructionNames = IM.empty
-          , _instructionFolder = ""
+          , _instructionFolder = Nothing
           }
 
 findInstruction :: Program -> Int32 -> Int32 -> IO Instruction
-findInstruction p tid oid = do
-  bs <- BL.readFile (_instructionFolder p </> show tid)
-  return . decode $ BL.drop (fromIntegral oid * 4) bs
+findInstruction p tid oid =
+  case _instructionFolder p of
+    Just folder -> do
+      bs <- BL.readFile (folder </> show tid)
+      return . decode $ BL.drop (fromIntegral oid * 4) bs
+    Nothing -> do
+      return nullInst
 
 instName :: Program -> Instruction -> String
 instName p i =

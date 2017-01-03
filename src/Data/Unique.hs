@@ -1,12 +1,8 @@
 module Data.Unique where
 
-import           Data.Traversable
-import qualified Data.Vector as V
-
-import           Wiretap.Utils
-
 import           Data.Function    (on)
-import qualified Data.IntMap as M
+import qualified Data.IntMap      as M
+import           Data.Traversable
 
 {-| Takes elements and make them unique by assigning an identifier -}
 data Unique e = Unique

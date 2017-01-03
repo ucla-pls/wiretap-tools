@@ -6,23 +6,20 @@ module Wiretap.Analysis.Lock
   )
 where
 
+import           Data.Function            (on)
 import qualified Data.List                as L
 import qualified Data.Map                 as M
-
 import           Data.Maybe
 import           Data.Unique
-import           Wiretap.Utils
 
 import           Wiretap.Analysis.Permute
 import           Wiretap.Data.Event
 import           Wiretap.Data.History
+import           Wiretap.Utils
 
-import           Control.Lens
 import           Control.Monad
 import           Control.Monad.State
-import           Data.Foldable
 
-import           Data.Function (on)
 
 -- | Lockset simulation, walks over a history and calculates the lockset
 -- | of each event. The function produces a tuple of an assignment a lockset
@@ -93,7 +90,7 @@ lockset h =
 -- | A deadlock edge is proof that there is exist an happen-before edge from the
 -- | acquirement of a lock to a request for another lock.
 data DeadlockEdge = DeadlockEdge
-  { lock :: Ref
+  { lock    :: Ref
   , acquire :: UE
   , request :: UE
   } deriving (Show)

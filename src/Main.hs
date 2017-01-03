@@ -15,6 +15,7 @@ import           Control.Lens              (over, _2)
 import           Control.Monad
 
 import           Data.Unique
+import           Debug.Trace
 
 import qualified Data.List                 as L
 import qualified Data.Map                  as M
@@ -42,7 +43,8 @@ patterns :: Docopt
 patterns = [docopt|wiretap-tools version 0.1.0.0
 
 Usage:
-   wiretap-tools (parse|count|size) [<history>]
+   wiretap-tools (count|size) [<history>]
+   wiretap-tools parse [-vPh] [<history>]
    wiretap-tools lockset [-vh] [<history>]
    wiretap-tools dataraces [options] [<history>]
    wiretap-tools deadlocks [options] [<history>]
@@ -102,13 +104,12 @@ readConfig args = do
     , prover = getArgWithDefault args "kalhauge" (longOption "prover")
     , proof = getLongOption "proof"
     , program = getLongOption "program"
-    , history = getLongOption "history"
+    , history = getArgument "history"
     , humanReadable = args `isPresent` longOption "human-readable"
     }
   where
     getLongOption = getArg args . longOption
-    getArgument = getArg args . longOption
-    aHistory = getArg args $ argument "history"
+    getArgument = getArg args . argument
 
 
 runCommand :: Arguments -> Config -> IO ()
@@ -119,7 +120,7 @@ runCommand args config = do
     pprint :: Show (PP a) => a -> String
     pprint = pp program
 
-  onCommand "parse" $ \events ->
+  onCommand "parse" $ \events -> do
     runEffect $ for events $ \e -> do
       i <- lift (instruction program e)
       let estr = pprint e
@@ -145,7 +146,7 @@ runCommand args config = do
 
   where
     getProgram config =
-      maybe (return Program.empty) (Program.fromFolder) $
+      maybe (return Program.empty) (Program.fromFolder . traceShowId) $
         program config <|> fmap takeDirectory (history config)
 
     dataRaceToString = show
@@ -167,9 +168,9 @@ runCommand args config = do
     withHistory :: (Handle -> IO ()) -> IO ()
     withHistory f =
       case history config of
-        Just events ->
+        Just events -> do
           withFile events ReadMode f
-        Nothing ->
+        Nothing -> do
           f stdin
 
     onCommand :: String -> (Producer Event IO () -> IO ()) -> IO ()
@@ -218,7 +219,6 @@ proveCandidates config generator toString events = do
             hPutStrLn stderr msg
 
     printProofs (Proof c constraints history) = liftIO $ do
-      putStrLn $ toString c
       case proof config of
         Just folder -> do
           createDirectoryIfMissing True folder

@@ -15,22 +15,21 @@ import Data.Unique
 import Wiretap.Data.Event
 import Wiretap.Data.Program
 
-data PP a = PP
-  { program :: Program
-  , item :: a
-  }
+data PP a = PP Program a
 
 pp :: Show (PP a) => Program -> a -> String
 pp p = show . PP p
 
 instance Show (PP Thread) where
-  show (PP p (Thread t)) =
+  show (PP _ (Thread t)) =
     "t" ++ show t
 
 instance Show (PP Event) where
   show (PP p e) =
     let op = show (order e) in
-    pp p (thread e) ++ "." ++ (replicate (4 - length op) '0') ++ op ++ " " ++ pp p (operation e)
+    pp p (thread e)
+      ++ "." ++ (replicate (4 - length op) '0') ++ op
+      ++ " " ++ pp p (operation e)
 
 instance Show (PP Operation) where
   show (PP p o) =
@@ -49,6 +48,7 @@ instance Show (PP Operation) where
 
       Begin -> ["begin"]
       End -> ["end"]
+      Branch -> ["branch"]
 
 instance Show (PP Location) where
   show (PP p l) =
@@ -61,8 +61,8 @@ instance Show (PP Location) where
         pp p r ++ "[" ++ show i ++ "]"
 
 instance Show (PP Value) where
-  show (PP p v) =
-    case v of
+  show (PP _ value) =
+    case value of
       Byte v -> "i8!" ++ showHex v ""
       Char v -> show v
       Short v -> "i16!" ++ showHex v ""
@@ -76,7 +76,7 @@ instance Show (PP Field) where
   show (PP p f) = fieldName p f
 
 instance Show (PP Ref) where
-  show (PP p (Ref r)) =
+  show (PP _ (Ref r)) =
     "r!" ++ showHex r ""
 
 instance Show (PP Instruction) where

@@ -22,19 +22,17 @@ import           Prelude                hiding (reads)
 
 import           Control.Lens           hiding (none)
 import           Control.Monad.IO.Class
+
 import qualified Data.List              as L
 import qualified Data.Map               as M
-import qualified Data.Set               as S
-
-import           Debug.Trace
-
 import           Data.PartialOrder
+import qualified Data.Set               as S
 import           Data.Unique
 
 import           Wiretap.Analysis.LIA
 import           Wiretap.Data.Event
 import           Wiretap.Data.History
-import           Wiretap.Format.Text
+
 import           Wiretap.Utils
 
 sc :: PartialHistory h => h -> LIA UE
@@ -315,7 +313,7 @@ class Candidate a where
 data Proof a = Proof
   { candidate   :: a
   , constraints :: LIA UE
-  , evidence   :: [UE]
+  , evidence    :: [UE]
   } deriving Functor
 
 type Result a = Either String (Proof a)

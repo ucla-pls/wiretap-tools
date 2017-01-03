@@ -8,26 +8,16 @@ module Wiretap.Format.Binary
 
 import System.IO
 import           System.FilePath
-import Debug.Trace
-
-import GHC.Int (Int32)
 
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Unsafe as BU
 
-import Data.Binary.Get
-import Data.Word
-import Data.Bits
-
 import Wiretap.Data.Event
-import Wiretap.Data.Program
-import Wiretap.Data.MiniParser
 
 import Pipes
 import Pipes.ByteString
 import Pipes.Binary
-import Pipes.Parse
 import qualified Pipes.Prelude as P
 
 import Control.Lens (zoom, view)
@@ -173,7 +163,7 @@ encodeLogEvents = await >> go
       case event of
         LogEvent End ->
           return ()
-        otherwise -> do
+        _ -> do
           encode event
           go
 {-# INLINABLE encodeLogEvents #-}

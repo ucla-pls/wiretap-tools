@@ -4,24 +4,17 @@ module Wiretap.Analysis.DataRace
   , DataRace (..)
   ) where
 
-import           Prelude                         hiding (reads)
+import           Prelude                  hiding (reads)
 
-import           Debug.Trace
-
-import qualified Data.List                       as L
-import qualified Data.Map                        as M
-
-import           Data.Function                   (on)
-import           Data.Traversable
-import           Data.Foldable
+import           Data.Function            (on)
+import qualified Data.List                as L
+import qualified Data.Map                 as M
 import           Data.Unique
-import           Control.Monad
-import           Control.Lens
 
 import           Wiretap.Analysis.Permute
+import           Wiretap.Data.Event
 import           Wiretap.Data.History
 import           Wiretap.Utils
-import           Wiretap.Data.Event
 
 sharedLocations :: PartialHistory h
   => h
@@ -51,8 +44,8 @@ sharedLocations h =
 
 data DataRace = DataRace
   { location :: Location
-  , a :: UE
-  , b :: UE
+  , a        :: UE
+  , b        :: UE
   } deriving (Show, Eq)
 
 instance Ord DataRace where

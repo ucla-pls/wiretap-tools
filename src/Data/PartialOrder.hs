@@ -1,11 +1,10 @@
-module Data.PartialOrder (PartialOrder(..)
-                         , (!<)
-                         , (!>)
-                         , (!>=)
-                         , (!<=)
-                         )where
-
-import Data.Ord
+module Data.PartialOrder
+  ( PartialOrder(..)
+  , (!<)
+  , (!>)
+  , (!>=)
+  , (!<=)
+  ) where
 
 (...) = (.) . (.)
 

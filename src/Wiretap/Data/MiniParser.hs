@@ -1,18 +1,16 @@
-  {-# LANGUAGE CPP, MagicHash, BangPatterns #-}
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE CPP          #-}
+{-# LANGUAGE MagicHash    #-}
 module Wiretap.Data.MiniParser where
 
-import GHC.Base
-import GHC.Int
+import           GHC.Base
+import           GHC.Int
 import           GHC.Word
 
-import           Data.Word
 import           Data.Bits
 
-import           Data.Binary.Get
-import qualified Data.Binary.Get.Internal as I
-
-import qualified Data.ByteString as B
-import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString        as B
+import qualified Data.ByteString.Lazy   as BL
 import qualified Data.ByteString.Unsafe as BU
 
 

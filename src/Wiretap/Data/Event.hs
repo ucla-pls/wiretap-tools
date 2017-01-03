@@ -11,18 +11,10 @@ import           Numeric
 import           Data.Binary
 import           Data.Binary.Put
 import           Data.Binary.Get
-import qualified Data.Binary.Get.Internal as I
-
-import qualified Data.ByteString as B
-import qualified Data.ByteString.Lazy as BL
-import qualified Data.ByteString.Unsafe as BU
-
 
 import           Test.QuickCheck hiding ((.&.), (.|.))
 
-import GHC.Base
 import           GHC.Int
-import           GHC.Word
 
 import qualified Wiretap.Data.Program as Program
 import           Wiretap.Data.MiniParser as Program
@@ -285,10 +277,10 @@ instance Binary Operation where
       putValue v
 
     Begin ->
-      putWord8 8
+      putWord8 6
 
     End ->
-      putWord8 9
+      putWord8 7
 
   get = {-# SCC get_operation #-} do
     w <- {-# SCC get_word #-} getWord8

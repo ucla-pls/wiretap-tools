@@ -2,7 +2,6 @@
 {-# LANGUAGE LambdaCase #-}
 module Wiretap.Data.History where
 
-import           Control.Monad
 import           Data.Foldable
 import qualified Data.Map           as M
 import qualified Data.Set           as S
