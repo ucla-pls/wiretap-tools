@@ -1,4 +1,18 @@
-module Wiretap.Analysis.LIA where
+module Wiretap.Analysis.LIA
+  ( LIA (..)
+  , LIAAtom (..)
+  , (~>)
+  , pairwise
+  , orders
+  , totalOrder
+
+  , toCNF
+  , solve
+  , toZ3
+  )
+where
+
+import Prelude hiding (product)
 
 import qualified Data.Vector as V
 import qualified Data.List as L
@@ -21,6 +35,7 @@ data LIA e
   deriving (Show)
 
 infixl 8 ~>
+(~>) :: e -> e -> LIA e
 (~>) = Order
 
 totalOrder :: [e] -> LIA e
@@ -38,25 +53,25 @@ data LIAAtom e
  deriving (Show)
 
 toCNF :: LIA e -> [[LIAAtom e]]
-toCNF a =
-  case a of
+toCNF e =
+  case e of
     Order a b -> [[AOrder a b]]
     Eq a b -> [[AEq a b]]
     And es ->
       concatMap toCNF es
     Or es ->
       combinate (product (++)) $ map toCNF es
-  where
-    combinate :: ([a] -> [a] -> [a]) -> [[a]] -> [a]
-    combinate f l =
-      case l of
-        a':[] -> a'
-        a':as -> f a' $ combinate f as
-        [] -> []
 
-    product :: (a -> b -> c) -> [a] -> [b] -> [c]
-    product f as bs =
-      [ f a b | a <- as, b <- bs ]
+combinate :: ([a] -> [a] -> [a]) -> [[a]] -> [a]
+combinate f l =
+  case l of
+    a':[] -> a'
+    a':as -> f a' $ combinate f as
+    [] -> []
+
+product :: (a -> b -> c) -> [a] -> [b] -> [c]
+product f as bs =
+  [ f a b | a <- as, b <- bs ]
 
 
 {-| solve takes a vector of elements and logic constraints -}
@@ -70,7 +85,7 @@ solve elems lia = liftIO $ evalZ3 $ do
 
   assert ast
 
-  (result, solution) <- withModel $ \m -> V.mapM (evalInt m) vars
+  (_, solution) <- withModel $ \m -> V.mapM (evalInt m) vars
 
   case solution of
     Just assignment -> do

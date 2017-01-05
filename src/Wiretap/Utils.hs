@@ -5,7 +5,9 @@ import qualified Data.Map as M
 import Control.Monad
 
 {-| a blackbird -}
+(...) :: (c -> d) -> (a -> b -> c) -> a -> b -> d
 (...) = (.) . (.)
+
 
 {-| returns the possible combinations of pairs, without replacements -}
 combinations :: [a] -> [(a, a)]
@@ -103,7 +105,7 @@ defM (Nothing) = mempty
 splitOn :: Eq a => a -> [a] -> [[a]]
 splitOn a lst =
   case rest of
-    a': rest -> before : splitOn a rest
+    _:rest' -> before : splitOn a rest'
     [] -> [before]
   where
     (before, rest) = span (/= a) lst

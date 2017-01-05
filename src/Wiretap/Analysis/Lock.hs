@@ -3,6 +3,8 @@ module Wiretap.Analysis.Lock
   , locksetSimulation
   , locksetFilter
   , lockset
+  , DeadlockEdge
+  , Deadlock
   )
 where
 
@@ -20,7 +22,6 @@ import           Wiretap.Utils
 import           Control.Monad
 import           Control.Monad.State
 
-
 -- | Lockset simulation, walks over a history and calculates the lockset
 -- | of each event. The function produces a tuple of an assignment a lockset
 -- | to every event, and the hold lockset of every thread.
@@ -30,10 +31,10 @@ locksetSimulation :: PartialHistory h
   => M.Map Thread [(Ref, UE)]
   -> h
   -> (UniqueMap [(Ref, UE)], M.Map Thread [(Ref, UE)])
-locksetSimulation state history =
+locksetSimulation s history =
   (fromUniques locksets, state')
   where
-    (locksets, state') = runState (simulateM step history) state
+    (locksets, state') = runState (simulateM step history) s
 
     step u@(Unique _ e) =
       case operation e of
@@ -41,7 +42,7 @@ locksetSimulation state history =
           updateAndGet t ((l,u):)
         Release l ->
           updateAndGet t $ L.filter ((l ==) . fst)
-        otherwise ->
+        _ ->
           gets $ fromMaybe [] . M.lookup t
       where t = thread e
 
@@ -77,8 +78,12 @@ locksetFilter' lm a =
     [] -> Right a
     ls -> Left $ "Candidates shares lock " ++ show ls
 
-lockMap h =
-  fst $ locksetSimulation M.empty h
+lockMap
+  :: PartialHistory h
+  => h
+  -> UniqueMap [(Ref, UE)]
+lockMap =
+  fst . locksetSimulation M.empty
 
 lockset :: PartialHistory h
   => h
@@ -90,27 +95,27 @@ lockset h =
 -- | A deadlock edge is proof that there is exist an happen-before edge from the
 -- | acquirement of a lock to a request for another lock.
 data DeadlockEdge = DeadlockEdge
-  { lock    :: Ref
-  , acquire :: UE
-  , request :: UE
+  { _lock    :: Ref
+  , _acquire :: UE
+  , _request :: UE
   } deriving (Show)
 
 -- | A deadlock is two deadlock edges where (operation . request . a) == Request
 -- | (lock . b) and (operation . request . b) == Request (lock a).
 data Deadlock = Deadlock
-  { a :: DeadlockEdge
-  , b :: DeadlockEdge
+  { edgeA :: DeadlockEdge
+  , edgeB :: DeadlockEdge
   } deriving (Show)
 
 instance Candidate Deadlock where
   toEventPair dl =
-    (request . a $ dl, request . b $ dl)
+    (_request . edgeA $ dl, _request . edgeB $ dl)
 
 deadlockCandidates :: PartialHistory h
   => M.Map Thread [(Ref, UE)]
   -> h
   -> ([Deadlock], M.Map Thread [(Ref, UE)])
-deadlockCandidates state h =
+deadlockCandidates s h =
   (catMaybes $ L.map getDeadlock pairs, state')
   where
     pairs = combinations $ onRequests (,) h
@@ -122,4 +127,4 @@ deadlockCandidates state h =
       (_, acq) <- L.find ((l ==) . fst) $ lm ! rel
       return $ DeadlockEdge l acq rel
 
-    (lm, state') = locksetSimulation state h
+    (lm, state') = locksetSimulation s h

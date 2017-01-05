@@ -66,8 +66,8 @@ withPair (a, b) h =
   case span isNotAB $ enumerate h of
     (xs, ab : ys) ->
       case span isNotAB ys of
-        (ys', ab' : rest) -> concat [xs, [ab], ys', [ab']]
-        (ys', [])         -> concat [xs, [ab], ys']
+        (ys', ab' : _) -> concat [xs, [ab], ys', [ab']]
+        (ys', [])      -> concat [xs, [ab], ys']
     (xs, []) -> xs
   where
     isNotAB e = e /= a && e /= b
@@ -95,33 +95,33 @@ onReads
   => (UE -> (Location, Value) -> a)
   -> h
   -> [a]
-onReads = onEvent filter
-  where filter (Read l v) = Just (l, v)
-        filter _ = Nothing
+onReads = onEvent filter'
+  where filter' (Read l v) = Just (l, v)
+        filter' _ = Nothing
 
 onWrites
   :: PartialHistory h
   => (UE -> (Location, Value) -> a)
   -> h
   -> [a]
-onWrites = onEvent filter
-  where filter (Write l v) = Just (l, v)
-        filter _ = Nothing
+onWrites = onEvent filter'
+  where filter' (Write l v) = Just (l, v)
+        filter' _ = Nothing
 
 onAcquires
   :: PartialHistory h
   => (UE -> Ref -> a)
   -> h
   -> [a]
-onAcquires = onEvent filter
-  where filter (Acquire r) = Just r
-        filter _ = Nothing
+onAcquires = onEvent filter'
+  where filter' (Acquire r) = Just r
+        filter' _ = Nothing
 
 onRequests
   :: PartialHistory h
   => (UE -> Ref -> a)
   -> h
   -> [a]
-onRequests = onEvent filter
-  where filter (Request r) = Just r
-        filter _ = Nothing
+onRequests = onEvent filter'
+  where filter' (Request r) = Just r
+        filter' _ = Nothing

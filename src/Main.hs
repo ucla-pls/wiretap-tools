@@ -15,7 +15,6 @@ import           Control.Lens              (over, _2)
 import           Control.Monad
 
 import           Data.Unique
-import           Debug.Trace
 
 import qualified Data.List                 as L
 import qualified Data.Map                  as M

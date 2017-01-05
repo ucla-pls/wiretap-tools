@@ -21,7 +21,7 @@ newtype MiniParser a = MiniParser
 instance MonadPlus MiniParser where
   mzero = parseError
   a `mplus` b = MiniParser $ \bs -> do
-    (a', bs') <- runMiniParser a bs
+    (_, bs') <- runMiniParser a bs
     (b', bs'') <- runMiniParser b bs'
     return (b', bs'')
 
@@ -53,7 +53,7 @@ instance Monad MiniParser where
   {-# INLINE (>>=) #-}
 
 parseError :: MiniParser a
-parseError = MiniParser $ \bs -> Nothing
+parseError = MiniParser $ \_ -> Nothing
 {-# INLINABLE parseError #-}
 
 drawN :: Int64 -> MiniParser BL.ByteString

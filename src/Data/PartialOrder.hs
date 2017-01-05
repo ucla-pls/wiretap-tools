@@ -6,6 +6,7 @@ module Data.PartialOrder
   , (!<=)
   ) where
 
+(...) :: (b -> c) -> (a -> a1 -> b) -> a -> a1 -> c
 (...) = (.) . (.)
 
 class PartialOrder a where
