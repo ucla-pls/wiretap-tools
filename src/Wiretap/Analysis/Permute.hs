@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DeriveFunctor    #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TemplateHaskell  #-}
@@ -10,7 +11,7 @@ module Wiretap.Analysis.Permute
 
   , Candidate(..)
   , Proof(..)
-  , Result (..)
+  , Result
   , failedToProve
 
   , (~/>)
@@ -105,13 +106,13 @@ lc h =
 
     step u@(Unique _ e) =
       case operation e of
-        Acquire l -> update (acq l) (thread e)
-        Release l -> update rel (thread e)
+        Acquire l -> update (acqf l) (thread e)
+        Release _ -> update relf (thread e)
         _         -> id
       where
-        acq l (pairs, stack) =
+        acqf l (pairs, stack) =
           (pairs, (l,u):stack)
-        rel (pairs, stack) =
+        relf (pairs, stack) =
           case stack of
             (l, acq):stack' -> ((l, (acq, u)):pairs, stack')
             [] -> error "Can't release a lock that has not been acquired"
@@ -146,7 +147,7 @@ rwc h =
         _         -> id
     update u f = updateDefault ([], []) (over f (u:))
 
--- | returns the control flow to a single event, this flow jumps threads, with
+-- | Returns the control flow to a single event, this flow jumps threads, with
 -- | the Join and Fork events.
 controlFlow
   :: PartialHistory h
@@ -165,12 +166,13 @@ controlFlow h u@(Unique _ e) =
         (thread e' `S.insert` threads, u':events)
       Join t | thread e' `S.member` threads ->
         (t `S.insert` threads, u':events)
-      otherwise | thread e' `S.member` threads ->
+      _ | thread e' `S.member` threads ->
         (threads, u':events)
-      otherwise -> s
+      _ -> s
 
 -- | Get all refs known by the event at the moment of execution.
-knownRefs (Unique i e) =
+knownRefs :: UE -> S.Set Ref
+knownRefs (Unique _ e) =
   case operation e of
     Write l (Object v) ->
       maybe S.empty S.singleton (ref l) `S.union` S.singleton (Ref v)
@@ -182,7 +184,7 @@ knownRefs (Unique i e) =
       S.singleton r
     Request r ->
       S.singleton r
-    otherwise ->
+    _ ->
       S.empty
 
 -- | For a given event, choose all the reads, and locks, that needs to be
@@ -195,7 +197,7 @@ controlFlowDependencies
 controlFlowDependencies h u =
  simulateReverse step ([], knownRefs u, False) (controlFlow h u)  ^. _1
   where
-    step u'@(Unique i e') s@(events, refs, branch) =
+    step u'@(Unique _ e') s@(events, refs, branch) =
       case operation e' of
         Read _ _ | branch ->
           over _1 (u':) s
@@ -203,7 +205,9 @@ controlFlowDependencies h u =
           over _1 (u':) s
         Acquire r ->
           (u':events, r `S.insert` refs, branch)
-        otherwise ->
+        Branch ->
+          set _3 True s
+        _ ->
           s
 
 controlFlowConsistency
@@ -240,7 +244,7 @@ controlFlowConsistency us h =
       where
         rwrites = writes M.! l
 
-    lockConsitency a ref =
+    lockConsitency a ref' =
       -- Any acquire we test is already controlFlowConsistent, covered by the
       -- dependencies in the controlFlowConsistencies.
       case M.lookup a releaseFromAcquire of
@@ -267,17 +271,17 @@ controlFlowConsistency us h =
           , a' `S.member` visited'
           ]
       where
-        (dr, pairs, da) = lockPairsWithRef M.! ref
+        (dr, pairs, da) = lockPairsWithRef M.! ref'
 
   writes =
     mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
 
   locksWithRef =
-    mapOnFst $ onEvent filter (flip (,)) h
+    mapOnFst $ onEvent filter' (flip (,)) h
     where
-      filter (Acquire l) = Just l
-      filter (Release l) = Just l
-      filter _           = Nothing
+      filter' (Acquire l) = Just l
+      filter' (Release l) = Just l
+      filter' _           = Nothing
 
   releaseFromAcquire :: M.Map UE UE
   releaseFromAcquire =
@@ -287,7 +291,7 @@ controlFlowConsistency us h =
   lockPairsWithRef =
     M.map (simulateReverse pairer (Nothing, [], Nothing)) locksWithRef
     where
-      pairer u@(Unique i e) s@(dr, pairs, da)=
+      pairer u@(Unique _ e) s@(dr, pairs, da)=
         case operation e of
           Acquire _ ->
             case dr of
@@ -296,13 +300,15 @@ controlFlowConsistency us h =
           Release _ ->
             case dr of
               Nothing -> (Just u, pairs, da)
-              Just r  -> error "Can't release the same ref twice in a row."
-          otherwise -> s
+              Just _  -> error "Can't release the same ref twice in a row."
+          _ -> s
 
 
+(~/>) :: UE -> UE -> Bool
 (~/>) (Unique _ a) (Unique _ b) =
   not (a !< b)
 
+(~/~) :: UE -> UE -> Bool
 (~/~) a b =
   a ~/> b && b ~/> a
 
@@ -318,41 +324,50 @@ data Proof a = Proof
 
 type Result a = Either String (Proof a)
 
+withProof :: a -> LIA UE -> [UE] -> Result a
 withProof a c p =
   Right $ Proof a c p
+
+failedToProve :: String -> Result a
 failedToProve =
   Left
+
+type Prover = forall h . PartialHistory h => h -> (UE, UE) -> LIA UE
 
 {-| permute takes partial history and two events, if the events can be arranged
 next to each other return. -}
 permute
   :: (PartialHistory h, MonadIO m, Candidate a)
-  => (h -> (UE, UE) -> LIA UE)
+  => Prover
   -> h
   -> a
   -> m (Result a)
 permute prover h a = do
-  solution <- solve (enumerate h) constraints
+  solution <- solve (enumerate h) cnts
   case solution of
     Just hist ->
-      return $ withProof a constraints hist
+      return $ withProof a cnts (withPair pair hist)
     Nothing ->
       return $ failedToProve "Could not solve the constraints."
   where
     pair = toEventPair a
-    constraints = prover h pair
+    cnts = prover h pair
 
+said :: Prover
 said h (a, b) =
   And $ Eq a b :
     ([ sc, mhb, lc, rwc ] <*> [h])
 
+kalhauge :: Prover
 kalhauge h (a, b) =
   And $ Eq a b :
     ([ sc, mhb, controlFlowConsistency [a, b]] <*> [h])
 
+free :: Prover
 free h (a, b) =
   And $ Eq a b :
     ([ sc, mhb ] <*> [h])
 
-none h (a, b) =
+none :: Prover
+none _ (a, b) =
   And [Eq a b]

@@ -44,7 +44,7 @@ patterns = [docopt|wiretap-tools version 0.1.0.0
 
 Usage:
    wiretap-tools (count|size) [<history>]
-   wiretap-tools parse [-vPh] [<history>]
+   wiretap-tools parse [-Ph] [<history>]
    wiretap-tools lockset [-vh] [<history>]
    wiretap-tools dataraces [options] [<history>]
    wiretap-tools deadlocks [options] [<history>]
@@ -146,7 +146,7 @@ runCommand args config = do
 
   where
     getProgram config =
-      maybe (return Program.empty) (Program.fromFolder . traceShowId) $
+      maybe (return Program.empty) Program.fromFolder $
         program config <|> fmap takeDirectory (history config)
 
     dataRaceToString = show
@@ -219,6 +219,7 @@ proveCandidates config generator toString events = do
             hPutStrLn stderr msg
 
     printProofs (Proof c constraints history) = liftIO $ do
+      putStrLn . toString $ c
       case proof config of
         Just folder -> do
           createDirectoryIfMissing True folder

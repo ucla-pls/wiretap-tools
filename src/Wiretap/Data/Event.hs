@@ -63,7 +63,8 @@ instruction :: Program.Program -> Event -> IO Program.Instruction
 instruction p e =
   Program.findInstruction p (threadId $ thread e) (order e)
 
-prop_EventIsBinary = prop_isBinary :: Event -> Bool
+prop_EventIsBinary :: Event -> Bool
+prop_EventIsBinary = prop_isBinary
 
 newtype LogEvent = LogEvent
   { logOperation :: Operation
@@ -82,7 +83,8 @@ instance Binary LogEvent where
 instance Arbitrary LogEvent where
   arbitrary = LogEvent <$> arbitrary
 
-prop_LogEventIsBinary = prop_isBinary :: LogEvent -> Bool
+prop_LogEventIsBinary :: LogEvent -> Bool
+prop_LogEventIsBinary = prop_isBinary
 
 newtype Ref = Ref
   { pointer :: Word32 }
@@ -95,7 +97,8 @@ instance Binary Ref where
 instance Arbitrary Ref where
   arbitrary = Ref <$> arbitrary
 
-prop_RefIsBinary = prop_isBinary :: Ref -> Bool
+prop_RefIsBinary :: Ref -> Bool
+prop_RefIsBinary = prop_isBinary
 
 data Location
   = Dynamic !Ref !Program.Field
@@ -136,7 +139,8 @@ instance Arbitrary Location where
     , Dynamic <$> arbitrary <*> (Program.Field <$> arbitrary)
     ]
 
-prop_LocationIsBinary = prop_isBinary :: Location -> Bool
+prop_LocationIsBinary :: Location -> Bool
+prop_LocationIsBinary = prop_isBinary
 
 data Value
   = Byte !Word8
@@ -265,14 +269,14 @@ instance Binary Operation where
       put r
 
     Read l v -> do
-      let id = case l of Array _ _ -> 14; otherwise -> 12
-      putWord8 $ (getValueId v `shiftL` 4) .|. id
+      let idx = case l of Array _ _ -> 14; _ -> 12
+      putWord8 $ (getValueId v `shiftL` 4) .|. idx
       put l
       putValue v
 
     Write l v -> do
-      let id = case l of Array _ _ -> 15; otherwise -> 13
-      putWord8 $ (getValueId v `shiftL` 4) .|. id
+      let idx = case l of Array _ _ -> 15; _ -> 13
+      putWord8 $ (getValueId v `shiftL` 4) .|. idx
       put l
       putValue v
 
@@ -282,48 +286,50 @@ instance Binary Operation where
     End ->
       putWord8 7
 
+    Branch ->
+      putWord8 8
+
   get = {-# SCC get_operation #-} do
     w <- {-# SCC get_word #-} getWord8
     getOperation w
     -- bs <- getLazyByteString (eventSize w)
     -- return $ runGet (innerGet w) bs
 
+-- parseOperation :: Word8 -> MP Operation
+-- parseOperation w bs i = --{-# SCC parseOperation #-}
+--   case w .&. 0x0f of
+--     0 -> Synch . fromIntegral <$> parseInt32be bs i
+--     1 -> Fork <$> parseThread bs i
+--     2 -> Join <$> parseThread bs i
+--     3 -> Request <$> parseRef bs i
+--     4 -> Acquire <$> parseRef bs i
+--     5 -> Release <$> parseRef bs i
+--     6 ->
+--       let (i', l) = parseLocation bs i in
+--       Read l <$> parseValue w bs i'
+--     7 ->
+--       let (i', l) = parseLocation bs i in
+--       Write l <$> parseValue w bs i'
+--     8 -> (i, Begin)
+--     9 -> (i, End)
+--     _ -> error $ "Unknown operation '" ++ showHex (fromIntegral w) "'"
+-- {-# INLINEABLE parseOperation #-}
 
-parseOperation :: Word8 -> MP Operation
-parseOperation w bs i = --{-# SCC parseOperation #-}
-  case w .&. 0x0f of
-    0 -> Synch . fromIntegral <$> parseInt32be bs i
-    1 -> Fork <$> parseThread bs i
-    2 -> Join <$> parseThread bs i
-    3 -> Request <$> parseRef bs i
-    4 -> Acquire <$> parseRef bs i
-    5 -> Release <$> parseRef bs i
-    6 ->
-      let (i', l) = parseLocation bs i in
-      Read l <$> parseValue w bs i'
-    7 ->
-      let (i', l) = parseLocation bs i in
-      Write l <$> parseValue w bs i'
-    8 -> (i, Begin)
-    9 -> (i, End)
-    _ -> error $ "Unknown operation '" ++ showHex (fromIntegral w) "'"
-{-# INLINEABLE parseOperation #-}
+-- drawOperation :: Word8 -> MiniParser Operation
+-- drawOperation w = {-# SCC drawOperation #-}
+--   case w .&. 0x0f of
+--     0 -> Synch . fromIntegral <$> drawInt32be
+--     1 -> Fork <$> drawThread
 
-drawOperation :: Word8 -> MiniParser Operation
-drawOperation w = {-# SCC drawOperation #-}
-  case w .&. 0x0f of
-    0 -> Synch . fromIntegral <$> drawInt32be
-    1 -> Fork <$> drawThread
-
-    3 -> Request <$> drawRef
-    4 -> Acquire <$> drawRef
-    5 -> Release <$> drawRef
-    6 -> Read <$> drawLocation <*> drawValue w
-    7 -> Write <$> drawLocation <*> drawValue w
-    8 -> return Begin
-    9 -> return End
-    _ -> error $ "Unknown operation '" ++ showHex (fromIntegral w) "'"
-{-# INLINEABLE drawOperation #-}
+--     3 -> Request <$> drawRef
+--     4 -> Acquire <$> drawRef
+--     5 -> Release <$> drawRef
+--     6 -> Read <$> drawLocation <*> drawValue w
+--     7 -> Write <$> drawLocation <*> drawValue w
+--     8 -> return Begin
+--     9 -> return End
+--     _ -> error $ "Unknown operation '" ++ showHex w "'"
+-- {-# INLINEABLE drawOperation #-}
 
 drawValue :: Word8 -> MiniParser Value
 drawValue w =
@@ -406,6 +412,7 @@ getOperation w =
     13 -> Write <$> getFieldLocation <*> getValue w
     14 -> Read <$> getArrayLocation <*> getValue w
     15 -> Write <$> getArrayLocation <*> getValue w
+    a -> error $ "Unknown event '" ++ showHex a "'"
 
 eventSize :: Word8 -> Int
 eventSize w =
@@ -415,7 +422,7 @@ eventSize w =
     8 -> 0
     9 -> 0
     a | 0 <= a && a <= 5 -> 4
-    a -> error $ "Unknown eventSize '" ++ showHex (fromIntegral a) "'"
+    a -> error $ "Unknown eventSize '" ++ showHex a "'"
 {-# INLINE eventSize #-}
 
 valueSize :: Word8 -> Int
@@ -447,7 +454,8 @@ instance Arbitrary Operation where
     , return Branch
     ]
 
-prop_OperationIsBinary = prop_isBinary :: Operation -> Bool
+prop_OperationIsBinary :: Operation -> Bool
+prop_OperationIsBinary = prop_isBinary
 
 prop_isBinary :: (Binary a, Eq a) => a -> Bool
 prop_isBinary t = (decode . encode) t == t
