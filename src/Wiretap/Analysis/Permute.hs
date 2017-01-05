@@ -261,11 +261,11 @@ controlFlowConsistency us h =
           | (a', r') <- pairs
           , a' `S.member` visited'
           , a' /= a, a' ~/> a, a' ~/> a
-          ] ++ (maybe [] ((:[]) . (~> a)) dr)
+          ] ++ map (~> a) dr
             -- ^ This might be superfluous.
-            ++ (maybe [] ((:[]) . (r ~>)) da)
-        -- If we do not have an release, make sure that we are ordered after all
-        -- other locks.
+            ++ map (r ~>) da
+            -- ^ If we do not have an release, make sure that we are ordered after all
+            -- other locks.
         Nothing ->
           And
           [ r' ~> a
@@ -289,20 +289,19 @@ controlFlowConsistency us h =
   releaseFromAcquire =
     M.fromList . concatMap (^. _2) $ M.elems lockPairsWithRef
 
-  lockPairsWithRef :: M.Map Ref (Maybe UE, [(UE, UE)], Maybe UE)
+  lockPairsWithRef :: M.Map Ref ([UE], [(UE, UE)], [UE])
   lockPairsWithRef =
-    M.map (simulateReverse pairer (Nothing, [], Nothing)) locksWithRef
+    M.map (simulateReverse pairer ([], [], [])) locksWithRef
     where
       pairer u@(Unique _ e) s@(dr, pairs, da)=
         case operation e of
           Acquire _ ->
             case dr of
-              Nothing -> (dr, pairs, Just u)
-              Just r  -> (Nothing, (u, r):pairs, da)
+              []     -> (dr, pairs, u:da)
+              [r]    -> ([], (u, r):pairs, da)
+              _:dr'  -> (dr', pairs, da)
           Release _ ->
-            case dr of
-              Nothing -> (Just u, pairs, da)
-              Just _  -> error "Can't release the same ref twice in a row."
+            (u:dr, pairs, da)
           _ -> s
 
 
