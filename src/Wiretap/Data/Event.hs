@@ -12,7 +12,7 @@ import           Data.Binary
 import           Data.Binary.Put
 import           Data.Binary.Get
 
-import           Test.QuickCheck hiding ((.&.), (.|.))
+import           Test.QuickCheck hiding ((.&.))
 
 import           GHC.Int
 
@@ -33,7 +33,8 @@ instance Binary Thread where
 instance Arbitrary Thread where
   arbitrary = Thread <$> arbitrary
 
-prop_ThreadIsBinary = prop_isBinary :: Thread -> Bool
+prop_ThreadIsBinary :: Thread -> Bool
+prop_ThreadIsBinary = prop_isBinary
 
 data Event = Event
   { thread    :: !Thread
@@ -44,7 +45,7 @@ data Event = Event
 instance PartialOrder Event where
   cmp a b | thread a == thread b =
     Just $ on compare order a b
-  cmp a b =
+  cmp _ _ =
     Nothing
 
 instance Binary Event where
@@ -111,7 +112,7 @@ ref l =
   case l of
     Dynamic r _ -> Just r
     Array r _ -> Just r
-    otherwise -> Nothing
+    _ -> Nothing
 
 instance Binary Location where
   put (Array r i) = put r >> put i
@@ -119,11 +120,13 @@ instance Binary Location where
   put (Dynamic r i) = put r >> putInt32be (Program.fieldId i)
   get = getArrayLocation
 
+getArrayLocation :: Get Location
 getArrayLocation = do
   r <- get
   i <- getInt32be
   return $ Array r (fromIntegral i)
 
+getFieldLocation :: Get Location
 getFieldLocation = do
   r <- get
   f <- Program.Field <$> getInt32be
@@ -235,10 +238,14 @@ data Operation
 
   | Begin
   | End
+
   | Branch
+
+  | Enter Ref Program.Method
 
   | Read Location Value
   | Write Location Value
+
 
   deriving (Show, Eq, Ord)
 
@@ -288,6 +295,11 @@ instance Binary Operation where
 
     Branch ->
       putWord8 8
+
+    Enter r m -> do
+      putWord8 10
+      put r
+      put m
 
   get = {-# SCC get_operation #-} do
     w <- {-# SCC get_word #-} getWord8
@@ -408,11 +420,12 @@ getOperation w =
     6 -> return Begin
     7 -> return End
     8 -> return Branch
+    10 -> Enter <$> get <*> get
     12 -> Read <$> getFieldLocation <*> getValue w
     13 -> Write <$> getFieldLocation <*> getValue w
     14 -> Read <$> getArrayLocation <*> getValue w
     15 -> Write <$> getArrayLocation <*> getValue w
-    a -> error $ "Unknown event '" ++ showHex a "'"
+    a -> error $ "Unknown event 0x" ++ showHex a ""
 
 eventSize :: Word8 -> Int
 eventSize w =

@@ -43,12 +43,16 @@ instance Show (PP Operation) where
       Acquire r -> ["acquire", pp p r]
       Release r -> ["release", pp p r]
 
+      Begin -> ["begin"]
+      End -> ["end"]
+
+      Branch -> ["branch"]
+
+      Enter r m -> ["enter", pp p r, pp p m ]
+
       Read l v -> ["read", pp p l, pp p v]
       Write l v -> ["write", pp p l, pp p v]
 
-      Begin -> ["begin"]
-      End -> ["end"]
-      Branch -> ["branch"]
 
 instance Show (PP Location) where
   show (PP p l) =
@@ -74,6 +78,9 @@ instance Show (PP Value) where
 
 instance Show (PP Field) where
   show (PP p f) = fieldName p f
+
+instance Show (PP Method) where
+  show (PP p m) = methodName p m
 
 instance Show (PP Ref) where
   show (PP _ (Ref r)) =

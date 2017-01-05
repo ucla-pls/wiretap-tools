@@ -123,10 +123,10 @@ runCommand args config = do
   onCommand "parse" $ \events -> do
     runEffect $ for events $ \e -> do
       i <- lift (instruction program e)
-      let estr = pprint e
-      lift . putStrLn $
-        estr ++ L.replicate (80 - length estr) ' '
-             ++ " - " ++ Program.instName program i
+      lift $ do
+        putStrLn $ pprint e
+        putStr "        "
+        putStrLn $ Program.instName program i
 
   onCommand "count" $
     countEvents >=> print

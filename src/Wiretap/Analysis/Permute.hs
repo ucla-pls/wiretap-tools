@@ -207,6 +207,8 @@ controlFlowDependencies h u =
           (u':events, r `S.insert` refs, branch)
         Branch ->
           set _3 True s
+        Enter r _ | pointer r /= 0 ->
+          over _2 (S.insert r) s
         _ ->
           s
 
