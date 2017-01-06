@@ -369,6 +369,6 @@ free h (a, b) =
   And $ Eq a b :
     ([ sc, mhb ] <*> [h])
 
-none :: Prover
+none :: h -> (UE, UE) -> LIA UE
 none _ (a, b) =
   And [Eq a b]

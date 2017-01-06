@@ -67,6 +67,16 @@ Filters are applicable to dataraces and deadlock analyses.
 
   lockset:   Remove all candidates with shared locks.
   all:       Rejects all candidates
+
+Provers:
+A prover is an algorithm turns a history into a constraint.
+
+  said:      The prover used in [Said 2011].
+  free:      A prover that only uses must-happen-before constraints, and sequential
+             consistency.
+  none:      No constraints except that the candidate has to be placed next to
+             each other.
+  kalhauge:  The data flow sentisive control-flow consistency alogrithm [default].
 |]
 
 data Config = Config
@@ -110,7 +120,6 @@ readConfig args = do
   where
     getLongOption = getArg args . longOption
     getArgument = getArg args . argument
-
 
 runCommand :: Arguments -> Config -> IO ()
 runCommand args config = do
@@ -289,7 +298,9 @@ cnf2dot p h cnf = unlines $
       case atom of
         AOrder a b | a `S.member` events &&  b `S.member` events ->
            "\"" ++ pr a ++ "\" -> \"" ++ pr b ++ "\" "
-           ++ if constrain then ";" else "[ style=dashed, color=\"" ++ color ++ "\"];"
+           ++ if constrain
+              then ";"
+              else "[ style=dashed, color=\"" ++ color ++ "\"];"
         AEq a b ->
              "\"" ++ pr a ++ "\" -> \"" ++ pr b ++ "\"; "
           ++ "\"" ++ pr b ++ "\" -> \"" ++ pr a ++ "\""
