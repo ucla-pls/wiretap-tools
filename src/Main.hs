@@ -160,14 +160,19 @@ runCommand args config = do
       maybe (return Program.empty) Program.fromFolder $
         program config <|> fmap takeDirectory (history cfg)
 
-    dataRaceToString = printDataRace
-    deadlockToString _ = return . show
+    deadlockToString :: Program.Program -> Deadlock -> IO String
+    deadlockToString p (Deadlock (DeadlockEdge _ aA aR) (DeadlockEdge _ bA bR)) = do
+       as <- sequence . map (instruction p . normal) $ [aA, aR]
+       bs <- sequence . map (instruction p . normal) $ [bA, bR]
+       return . L.intercalate ";" . L.sort .
+         L.map (L.intercalate "," . L.sort . L.map (pp p)) $ [as, bs]
 
-    printDataRace p (DataRace l a b) | humanReadable config =
+
+    dataRaceToString p (DataRace l a b) | humanReadable config =
       return $ padStr a' ' ' 60 ++ padStr b' ' ' 60 ++ pp p l
       where [a', b'] = map (pp p) [a, b]
 
-    printDataRace p (DataRace _ a b) = do
+    dataRaceToString p (DataRace _ a b) = do
       datarace <- mapM (instruction p . normal) [a, b]
       return $ unwords . L.sort $ map (pp p) datarace
 

@@ -3,8 +3,8 @@ module Wiretap.Analysis.Lock
   , locksetSimulation
   , locksetFilter
   , lockset
-  , DeadlockEdge
-  , Deadlock
+  , DeadlockEdge(..)
+  , Deadlock(..)
   )
 where
 
@@ -95,9 +95,9 @@ lockset h =
 -- | A deadlock edge is proof that there is exist an happen-before edge from the
 -- | acquirement of a lock to a request for another lock.
 data DeadlockEdge = DeadlockEdge
-  { _lock    :: Ref
-  , _acquire :: UE
-  , _request :: UE
+  { dedgeLock    :: Ref
+  , dedgeAcquire :: UE
+  , dedgeRequest :: UE
   } deriving (Show)
 
 -- | A deadlock is two deadlock edges where (operation . request . a) == Request
@@ -109,7 +109,7 @@ data Deadlock = Deadlock
 
 instance Candidate Deadlock where
   toEventPair dl =
-    (_request . edgeA $ dl, _request . edgeB $ dl)
+    (dedgeRequest . edgeA $ dl, dedgeRequest . edgeB $ dl)
 
 deadlockCandidates :: PartialHistory h
   => M.Map Thread [(Ref, UE)]

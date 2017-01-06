@@ -27,10 +27,11 @@ data Counter = Counter
   , begins   :: !Int
   , ends     :: !Int
   , branches :: !Int
+  , enters   :: !Int
   } deriving (Show)
 
 instance Monoid Counter where
-  mempty = Counter 0 0 0 0 0 0 0 0 0 0 0
+  mempty = Counter 0 0 0 0 0 0 0 0 0 0 0 0
   mappend a b = Counter
     { synchs   = sum synchs
     , acquires = sum acquires
@@ -43,6 +44,7 @@ instance Monoid Counter where
     , begins   = sum begins
     , ends     = sum ends
     , branches = sum branches
+    , enters   = sum enters
     }
     where
       sum f = f a + f b
@@ -61,6 +63,7 @@ incrCounter c Event {operation=o} =
    Begin     -> c { begins   = begins c + 1 }
    End       -> c { ends     = ends c + 1 }
    Branch    -> c { branches = branches c + 1 }
+   Enter _ _ -> c { enters   = enters c + 1 }
 
 counterHeader :: [String]
 counterHeader =
@@ -75,6 +78,7 @@ counterHeader =
   , "begins"
   , "ends"
   , "branches"
+  , "enters"
   ]
 
 counterToRow :: Counter -> [String]
@@ -91,6 +95,7 @@ counterToRow c =
     , begins
     , ends
     , branches
+    , enters
     ] <*> [c]
 
 countEvents :: Monad m => Producer Event m () -> m Counter
