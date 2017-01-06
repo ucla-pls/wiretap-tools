@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes       #-}
 {-# LANGUAGE RankNTypes        #-}
@@ -81,13 +82,13 @@ data Config = Config
 getArgOrExit :: Arguments -> Option -> IO String
 getArgOrExit = getArgOrExitWith patterns
 
+helpNeeded :: Arguments -> Bool
 helpNeeded args =
   args `isPresent` longOption "help"
 
 main :: IO ()
 main = do
-  args <- parseArgs patterns <$> getArgs
-  case args of
+  parseArgs patterns <$> getArgs >>= \case
     Right args -> do
       when (helpNeeded args) $ exitWithUsage patterns
       config <- readConfig args
@@ -113,19 +114,19 @@ readConfig args = do
 
 runCommand :: Arguments -> Config -> IO ()
 runCommand args config = do
-  program <- getProgram config
+  p <- getProgram config
 
   let
     pprint :: Show (PP a) => a -> String
-    pprint = pp program
+    pprint = pp p
 
   onCommand "parse" $ \events -> do
     runEffect $ for events $ \e -> do
-      i <- lift (instruction program e)
+      i <- lift (instruction p e)
       lift $ do
         putStrLn $ pprint e
         putStr "        "
-        putStrLn $ Program.instName program i
+        putStrLn $ Program.instName p i
 
   onCommand "count" $
     countEvents >=> print
@@ -138,30 +139,32 @@ runCommand args config = do
     forM_ locks $ printLockset pprint . over _2 (L.intercalate "," . map pprint)
 
   onCommand "dataraces" $
-    proveCandidates config (each . raceCandidates) dataRaceToString
+    proveCandidates config
+      (each . raceCandidates) $ dataRaceToString p
 
   onCommand "deadlocks" $
-    proveCandidates config (each . fst . deadlockCandidates M.empty) deadlockToString
+    proveCandidates config
+      (each . fst . deadlockCandidates M.empty) $ deadlockToString p
 
   where
-    getProgram config =
+    getProgram cfg =
       maybe (return Program.empty) Program.fromFolder $
-        program config <|> fmap takeDirectory (history config)
+        program config <|> fmap takeDirectory (history cfg)
 
-    dataRaceToString = show
-    deadlockToString = show
+    dataRaceToString = printDataRace
+    deadlockToString _ = return . show
 
-    printDataRace program (DataRace l a b) | humanReadable config =
-      putStrLn $ padStr ap ' ' 60 ++ padStr bp ' ' 60 ++ pp program l
-      where [ap, bp] = map (pp program) [a, b]
+    printDataRace p (DataRace l a b) | humanReadable config =
+      return $ padStr a' ' ' 60 ++ padStr b' ' ' 60 ++ pp p l
+      where [a', b'] = map (pp p) [a, b]
 
-    printDataRace program (DataRace l a b) = do
-      datarace <- mapM (instruction program . normal) [a, b]
-      putStrLn . unwords . L.sort $ map (pp program) datarace
+    printDataRace p (DataRace _ a b) = do
+      datarace <- mapM (instruction p . normal) [a, b]
+      return $ unwords . L.sort $ map (pp p) datarace
 
     printLockset pprint (e, locks) | humanReadable config =
       putStrLn $ padStr (pprint e) ' ' 60 ++ " - " ++ locks
-    printLockset pprint (e, locks) =
+    printLockset _ (_, locks) =
       putStrLn locks
 
     withHistory :: (Handle -> IO ()) -> IO ()
@@ -184,55 +187,55 @@ proveCandidates
   :: (Candidate a, MonadIO m)
   => Config
   -> (forall h. PartialHistory h => h -> Producer a m ())
-  -> (a -> String)
+  -> (a -> IO String)
   -> Producer Event m ()
   -> m ()
 proveCandidates config generator toString events = do
   runEffect $ for (chunck events) chunckProver
   where
-    chunckProver history =
-      for (generator history) $
-       filterCandidate (getFilters history)
-       ~> proveCandidate history
+    chunckProver hist =
+      for (generator hist) $
+       filterCandidate (getFilters hist)
+       ~> proveCandidate hist
        ~> printProofs
 
-    filterCandidate filters c =
-      case applyFilters c filters of
-        Right c -> yield c
+    filterCandidate filters' c =
+      case applyFilters c filters' of
+        Right c' -> yield c'
         Left msg ->
           liftIO $ when (verbose config) $ do
             hPutStrLn stderr "Filtered candidate away:"
-            hPrint stderr $ toString c
+            hPrint stderr =<< toString c
             hPutStrLn stderr "The reason was:"
             hPutStrLn stderr msg
 
     proveCandidate h c = do
-      p <- lift $ prove h c
-      case p of
+      lift (prove h c) >>= \case
         Right p -> yield p
         Left msg -> liftIO $
           when (verbose config) $ do
             hPutStrLn stderr "Couldn't prove candidate"
-            hPrint stderr $ toString c
+            hPrint stderr =<< toString c
             hPutStrLn stderr "The reason was:"
             hPutStrLn stderr msg
 
-    printProofs (Proof c constraints history) = liftIO $ do
-      putStrLn . toString $ c
+    printProofs (Proof c _ hist) = liftIO $ do
+      putStrLn =<< toString c
       case proof config of
         Just folder -> do
           createDirectoryIfMissing True folder
-          let (Unique ia a, Unique ib b) = toEventPair c
-          withFile (folder </> show ia ++ "-" ++ show ib ++ ".hist") WriteMode $ \h ->
-            runEffect $ each history >-> P.map normal >-> writeHistory h
+          let (Unique ia _, Unique ib _) = toEventPair c
+          withFile (folder </> show ia ++ "-" ++ show ib ++ ".hist")
+              WriteMode $ \h ->
+            runEffect $ each hist >-> P.map normal >-> writeHistory h
         Nothing ->
           return ()
 
-    getFilters history =
+    getFilters history' =
       map go (filters config)
       where
         go "lockset" =
-          locksetFilter history
+          locksetFilter history'
         go "all" =
           const $ Left "Rejected"
         go name =
@@ -250,42 +253,49 @@ proveCandidates config generator toString events = do
           "none"     -> none
           name       -> error $ "Unknown prover: '" ++ name ++ "'"
 
-    chunck events = do
-      h <- lift $ fromEvents <$> P.toListM events
+    chunck es = do
+      h <- lift $ fromEvents <$> P.toListM es
       yield $ Wiretap.Data.History.enumerate h
 
-cnf2dot :: PartialHistory h => Program.Program -> h -> [[LIAAtom (Unique Event)]] -> String
-cnf2dot program h cnf = unlines $
+cnf2dot
+  :: PartialHistory h
+  => Program.Program
+  -> h
+  -> [[LIAAtom (Unique Event)]]
+  -> String
+cnf2dot p h cnf = unlines $
   [ "digraph {"
   , "graph [overlap=false, splines=true];"
   , "edge [ colorscheme = dark28 ]"
   ]
   ++ [ unlines $ zipWith printEvent [0..] (Wiretap.Data.History.enumerate h)]
   ++ [ unlines $ printConjunction color cj
-     | (color, cj) <- zip (cycle $ map show [1..8]) cnf
+     | (color, cj) <- zip (cycle $ map show ([1..8] :: [Int])) cnf
      ]
   ++ [ "}" ]
   where
-    pprint = pp program
-    p u = "O" ++ show (idx u)
-    printEvent id u@(Unique _ event) =
-      p u ++ " [ shape = box, fontsize = 10, label = \""
-          ++ pprint (operation event) ++ "\", "
-          ++ "pos = \"" ++ show (threadId (thread event) * 200)
-          ++ "," ++ show (- id * 75) ++ "!\" ];"
+    pprint = pp p
+    pr u = "O" ++ show (idx u)
+
+    printEvent :: Int -> UE -> String
+    printEvent i u@(Unique _ event) =
+      pr u ++ " [ shape = box, fontsize = 10, label = \""
+           ++ pprint (operation event) ++ "\", "
+           ++ "pos = \"" ++ show (threadId (thread event) * 200)
+           ++ "," ++ show (- i * 75) ++ "!\" ];"
 
     events = S.fromList (Wiretap.Data.History.enumerate h)
     printAtom color constrain atom =
       case atom of
         AOrder a b | a `S.member` events &&  b `S.member` events ->
-           "\"" ++ p a ++ "\" -> \"" ++ p b ++ "\" "
+           "\"" ++ pr a ++ "\" -> \"" ++ pr b ++ "\" "
            ++ if constrain then ";" else "[ style=dashed, color=\"" ++ color ++ "\"];"
         AEq a b ->
-             "\"" ++ p a ++ "\" -> \"" ++ p b ++ "\"; "
-          ++ "\"" ++ p b ++ "\" -> \"" ++ p a ++ "\""
+             "\"" ++ pr a ++ "\" -> \"" ++ pr b ++ "\"; "
+          ++ "\"" ++ pr b ++ "\" -> \"" ++ pr a ++ "\""
         _ -> ""
 
-    printConjunction color [e] =
+    printConjunction _ [e] =
       [ printAtom "black" True e ]
     printConjunction color es =
       map (printAtom color False) es

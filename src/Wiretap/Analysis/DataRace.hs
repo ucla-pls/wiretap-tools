@@ -37,22 +37,22 @@ sharedLocations h =
       groupOnFst . L.sortOn fst
 
     reads =
-      onReads (\u (l, v) -> (l, u)) h
+      onReads (\u (l, _) -> (l, u)) h
 
     writes =
-      onWrites (\u (l, v) -> (l, u)) h
+      onWrites (\u (l, _) -> (l, u)) h
 
 data DataRace = DataRace
   { location :: Location
-  , a        :: UE
-  , b        :: UE
+  , eventA        :: UE
+  , eventB        :: UE
   } deriving (Show, Eq)
 
 instance Ord DataRace where
   compare = compare `on` toEventPair
 
 instance Candidate DataRace where
-  toEventPair (DataRace l a b) =
+  toEventPair (DataRace _ a b) =
     (a, b)
 
 raceCandidates :: PartialHistory h
