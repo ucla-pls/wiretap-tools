@@ -1,0 +1,6 @@
+edu/ucla/pls/baseline/Transfer."<init>":(Ledu/ucla/pls/baseline/Store;Ledu/ucla/pls/baseline/Store;)V
+edu/ucla/pls/baseline/Transfer.run:()V
+edu/ucla/pls/baseline/Transfer.main:([Ljava/lang/String;)V
+edu/ucla/pls/baseline/Store."<init>":(I)V
+edu/ucla/pls/baseline/Store.transferTo:(ILedu/ucla/pls/baseline/Store;)V
+edu/ucla/pls/baseline/Store.add:(I)V
