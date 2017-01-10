@@ -219,7 +219,7 @@ proveCandidates config generator toString events = do
         Left msg ->
           liftIO $ when (verbose config) $ do
             hPutStrLn stderr "Filtered candidate away:"
-            hPrint stderr =<< toString c
+            hPutStrLn stderr =<< toString c
             hPutStrLn stderr "The reason was:"
             hPutStrLn stderr msg
 
@@ -229,7 +229,7 @@ proveCandidates config generator toString events = do
         Left msg -> liftIO $
           when (verbose config) $ do
             hPutStrLn stderr "Couldn't prove candidate"
-            hPrint stderr =<< toString c
+            hPutStrLn stderr =<< toString c
             hPutStrLn stderr "The reason was:"
             hPutStrLn stderr msg
 
