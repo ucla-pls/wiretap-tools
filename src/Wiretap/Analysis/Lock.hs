@@ -21,6 +21,7 @@ import           Wiretap.Utils
 
 import           Control.Monad
 import           Control.Monad.State
+import           Control.Monad.Trans.Either
 
 -- | Lockset simulation, walks over a history and calculates the lockset
 -- | of each event. The function produces a tuple of an assignment a lockset
@@ -61,22 +62,22 @@ sharedLocks u a b =
   L.intersectBy ((==) `on` fst) (u ! a) (u ! b)
 
 locksetFilter
-  :: (Candidate a, PartialHistory h)
+  :: (Candidate a, PartialHistory h, Monad m)
   => h
   -> a
-  -> Either String a
+  -> EitherT String m a
 locksetFilter h =
   locksetFilter' $! lockMap h
 
 locksetFilter'
-  :: (Candidate a)
+  :: (Candidate a, Monad m)
   => UniqueMap [(Ref, UE)]
   -> a
-  -> Either String a
+  -> EitherT String m a
 locksetFilter' lm a =
   case uncurry (sharedLocks lm) $ toEventPair a of
-    [] -> Right a
-    ls -> Left $ "Candidates shares lock " ++ show ls
+    [] -> return a
+    ls -> left $ "Candidates shares locks " ++ (show . L.nub $ map fst ls)
 
 lockMap
   :: PartialHistory h
@@ -98,14 +99,14 @@ data DeadlockEdge = DeadlockEdge
   { dedgeLock    :: Ref
   , dedgeAcquire :: UE
   , dedgeRequest :: UE
-  } deriving (Show)
+  } deriving (Show, Ord, Eq)
 
 -- | A deadlock is two deadlock edges where (operation . request . a) == Request
 -- | (lock . b) and (operation . request . b) == Request (lock a).
 data Deadlock = Deadlock
   { edgeA :: DeadlockEdge
   , edgeB :: DeadlockEdge
-  } deriving (Show)
+  } deriving (Show, Ord, Eq)
 
 instance Candidate Deadlock where
   toEventPair dl =

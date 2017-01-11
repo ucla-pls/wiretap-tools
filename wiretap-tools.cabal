@@ -26,6 +26,7 @@ executable wiretap-tools
                      , containers >= 0.5.7.1
                      , directory >= 1.2.6.2
                      , docopt
+                     , either >= 4.4.1.1
                      , filepath >= 1.4.1.0
                      , lens >= 4.14
                      , mtl >= 2.2.1
@@ -33,6 +34,7 @@ executable wiretap-tools
                      , pipes-binary >= 0.4.1
                      , pipes-bytestring
                      , pipes-parse >= 3.0.7
+                     , transformers >= 0.5.2.0
                      , vector
                      , z3 >= 4.1.0
   hs-source-dirs:      src
@@ -57,6 +59,7 @@ benchmark wt-prof
                      , containers >= 0.5.7.1
                      , directory >= 1.2.6.2
                      , docopt
+                     , either >= 4.4.1.1
                      , filepath >= 1.4.1.0
                      , lens >= 4.14
                      , mtl >= 2.2.1
@@ -64,6 +67,7 @@ benchmark wt-prof
                      , pipes-binary >= 0.4.1
                      , pipes-bytestring
                      , pipes-parse >= 3.0.7
+                     , transformers >= 0.5.2.0
                      , vector
                      , z3 >= 4.1.0
   hs-source-dirs:      src
