@@ -58,8 +58,10 @@ Options:
                                is the folder of the history if none is declared.
 -f FILTER, --filter FILTER     For use in a candidate analysis. The multible filters
                                can be added seperated by commas. See filters.
--p PROVER, --prover PROVER     For use in a candidate analysis, if no prover is provided, un
-                               verified candidates are produced.
+-p PROVER, --prover PROVER     For use in a candidate analysis, if no prover is
+                               provided, un verified candidates are produced.
+-c, --chunk-size CHUNK_SIZE    For use to set a the size of the chunks, if not
+                               set the program will
 -o OUT, --proof OUT            Produces the proof in the following directory
 
 -v, --verbose                  Produce verbose outputs
@@ -90,6 +92,7 @@ data Config = Config
   , program       :: Maybe FilePath
   , history       :: Maybe FilePath
   , humanReadable :: Bool
+  , chunckSize    :: Maybe Int
   } deriving (Show, Read)
 
 getArgOrExit :: Arguments -> Option -> IO String
@@ -119,6 +122,7 @@ readConfig args = do
     , outputProof = getLongOption "proof"
     , program = getLongOption "program"
     , history = getArgument "history"
+    , chunckSize = read <$> getLongOption "chunk-size"
     , humanReadable = args `isPresent` longOption "human-readable"
     }
   where
@@ -247,9 +251,9 @@ proveCandidates config generator toString events =
         Left msg -> liftIO $ do
           when (verbose config) $ do
             hPutStrLn stderr "Could not prove candidate:"
-            hPutStrLn stderr =<< toString c
+            hPutStr stderr "  " >> toString c >>= hPutStrLn stderr
             hPutStrLn stderr "The reason was:"
-            hPutStrLn stderr msg
+            hPutStr stderr "  " >> hPutStrLn stderr msg
         Right proof' -> do
           modify (addProven $ candidate proof')
           liftIO $ printProof proof'
