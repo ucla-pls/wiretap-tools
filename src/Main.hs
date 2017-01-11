@@ -205,18 +205,19 @@ runCommand args config = do
     padStr p char size =
       p ++ L.replicate (size - length p) char
 
-data ProverState a = ProverState
-  { proven :: S.Set a
-  }
 
-addProven :: Ord a => a -> ProverState a -> ProverState a
+data ProverState = ProverState
+  { proven :: S.Set String
+  } deriving (Show)
+
+addProven :: String -> ProverState -> ProverState
 addProven a =
   ProverState . S.insert a . proven
 
-type ProverT a m = EitherT String (StateT (ProverState a) m)
+type ProverT a m = EitherT String (StateT ProverState m)
 
 proveCandidates
-  :: forall a m. (Candidate a, Ord a, MonadIO m)
+  :: forall a m. (Candidate a, Show a, Ord a, MonadIO m)
   => Config
   -> (forall h m'. (MonadIO m', PartialHistory h) => h -> Producer a m' ())
   -> (a -> IO String)
@@ -228,8 +229,10 @@ proveCandidates config generator toString events =
   where
     runProver s =
       flip evalStateT s $ do
-        runEffect $ for (chunck events) $
-          lift . chunckProver
+        runEffect $ for (chunck events) $ \e -> do
+          -- lift get >>= liftIO . print
+          lift $ chunckProver e
+          -- lift get >>= liftIO . print
 
     chunck es = do
       h <- lift . lift $ fromEvents <$> P.toListM es
@@ -238,10 +241,12 @@ proveCandidates config generator toString events =
     chunckProver
       :: forall h. (PartialHistory h)
       => h
-      -> StateT (ProverState a) m ()
+      -> StateT ProverState m ()
     chunckProver chunk =
-      runEffect . for (generator chunk) $
-        lift . candidateProver chunk
+      runEffect . for (generator chunk) $ \c ->  do
+        -- lift get >>= liftIO . print
+        lift $ candidateProver chunk c
+        -- lift get >>= liftIO . print
 
     candidateProver hist c = do
       result <- runEitherT $
@@ -254,9 +259,10 @@ proveCandidates config generator toString events =
             hPutStr stderr "  " >> toString c >>= hPutStrLn stderr
             hPutStrLn stderr "The reason was:"
             hPutStr stderr "  " >> hPutStrLn stderr msg
-        Right proof' -> do
-          modify (addProven $ candidate proof')
-          liftIO $ printProof proof'
+        Right proof -> do
+          str <- liftIO . toString $ candidate proof
+          modify $ addProven str
+          liftIO $ printProof proof
 
     printProof (Proof c _ hist) = do
       putStrLn =<< toString c
@@ -264,9 +270,8 @@ proveCandidates config generator toString events =
         Just folder -> do
           createDirectoryIfMissing True folder
           let (Unique ia _, Unique ib _) = toEventPair c
-          withFile (folder </> show ia ++ "-" ++ show ib ++ ".hist")
-              WriteMode $ \h ->
-            runEffect $ each hist >-> P.map normal >-> writeHistory h
+          withFile (folder </> show ia ++ "-" ++ show ib ++ ".hist") WriteMode $
+            \h -> runEffect $ each hist >-> P.map normal >-> writeHistory h
         Nothing ->
           return ()
 
@@ -277,7 +282,8 @@ proveCandidates config generator toString events =
         "reject" ->
           const $ left "Rejected"
         "unique" -> \c -> do
-          alreadyProven <- lift $ gets (S.member c . proven)
+          str <- liftIO $ toString c
+          alreadyProven <- lift $ gets (S.member str . proven)
           if alreadyProven
             then left "Already proven"
             else return c
