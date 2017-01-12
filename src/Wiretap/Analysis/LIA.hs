@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 module Wiretap.Analysis.LIA
   ( LIA (..)
   , LIAAtom (..)
@@ -14,7 +15,7 @@ where
 
 import Prelude hiding (product)
 
-import qualified Data.Vector as V
+import qualified Data.IntMap.Strict as IM
 import qualified Data.List as L
 
 import Control.Monad.IO.Class
@@ -74,22 +75,26 @@ product f as bs =
   [ f a b | a <- as, b <- bs ]
 
 
-{-| solve takes a vector of elements and logic constraints -}
+{-| solve takes a vector of elements and logic constraints
+
+This function assumes that the list of unique
+-}
 solve :: MonadIO m
   => [Unique e]
   -> LIA (Unique e)
   -> m (Maybe [Unique e])
 solve elems lia = liftIO $ evalZ3 $ do
-  vars <- V.replicateM (L.length elems) $ mkFreshIntVar "O"
-  ast <- toZ3 (\e -> vars V.! idx e) lia
+  vars <- IM.fromDistinctAscList <$>
+    mapM (\e -> (idx e,) <$> mkFreshIntVar "O") elems
+  ast <- toZ3 (\e -> vars IM.! idx e) lia
 
   assert ast
 
-  (_, solution) <- withModel $ \m -> V.mapM (evalInt m) vars
+  (_, solution) <- withModel $ \m -> mapM (evalInt m) vars
 
   case solution of
     Just assignment -> do
-       return . Just $ L.sortOn (\e -> assignment V.! idx e) elems
+       return . Just $ L.sortOn (\e -> assignment IM.! idx e) elems
     Nothing ->
       return Nothing
 

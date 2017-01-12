@@ -266,10 +266,11 @@ proveCandidates config generator toString events =
 
         go size chunk = do
           yield chunk
-          liftIO . when (verbose config) $ do
-            hPutStrLn stderr $ "Read Chunk of size: " ++ show actualChunkSize
+          case chunk of
+              a:_ -> logV $ "At event " ++ show (idx a)
+              [] -> return ()
           if actualChunkSize < size
-            then return ()
+            then logV $ "Done"
             else do
               new <- getN offset
               go size $ drop offset chunk ++ new
