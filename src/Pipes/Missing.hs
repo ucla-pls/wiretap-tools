@@ -2,9 +2,23 @@
 module Pipes.Missing where
 
 import           Control.Monad
-import           Data.Maybe
 import           Pipes
 import qualified Pipes.Prelude as P
+
+
+scan'
+  :: Monad m
+  => (x -> a -> (x, b))
+  -> x
+  -> Pipe a b m r
+scan' step begin = go begin
+  where
+    go x = do
+      a <- await
+      let (x', b) = step x a
+      yield b
+      go $! x'
+
 
 done :: Monad m
   => a
@@ -36,7 +50,7 @@ finite p = do
   r <- p >-> P.map Right
   done r
 
-{-| endless' is the same thing but discards the return value. -}
+{-| finite' is the same thing but discards the return value. -}
 finite' :: Monad m
   => Producer b m ()
   -> Finite' b m
@@ -71,21 +85,21 @@ merge :: Monad m
   -> Producer b m r1
   -> Producer b m r2
   -> Producer b m r
-merge end cmp a b =
-  lift (go <$> next a <*> next b) >>= id
+merge f cmp ax bx =
+  lift (go <$> next ax <*> next bx) >>= id
   where
     go a b =
       case (a, b) of
         (Right a', Right b') ->
           case fst a' `cmp` fst b' of
             GT        -> goB a  b'
-            otherwise -> goA a' b
+            _ -> goA a' b
         (Right a', _) ->
           goA a' b
         (_, Right b') ->
           goB a b'
         (Left r1, Left r2) ->
-          return $ end r1 r2
+          return $ f r1 r2
     goA (e, p) b = yield e >> lift (next p) >>= flip go b
     goB a (e, p) = yield e >> lift (next p) >>= go a
 
@@ -193,6 +207,8 @@ take' :: Monad m
 take' n = do
   replicateM_ n recover
 
+{-| takeEvery recovers every n'th element form the super pipe
+-}
 takeEvery :: Monad m
   => Int -> SubRWProducer' a a a m r
 takeEvery n = do
@@ -230,8 +246,8 @@ pfold :: Monad m
   -> b
   -> Producer a m ()
   -> Producer a m b
-pfold f init p =
-  finite' p >-> subFold f init
+pfold f begin p =
+  finite' p >-> subFold f begin
 
 {-| subFold is a fold in a sub pipe, this enable you to
 fold over a stream without consuming the values. A subfold
@@ -241,8 +257,8 @@ subFold :: Monad m
   => (b -> a -> b)
   -> b
   -> Pipe (Maybe a) a m b
-subFold f init = do
-  P.fold f init id copy'
+subFold f begin = do
+  P.fold f begin id copy'
 
 subEffect :: Monad m
   => SubEffect a' b' m r
@@ -283,7 +299,7 @@ asList' = P.toListM'
 count :: Monad m
   => Pipe (Maybe a) a m Int
 count =
-  subFold (\b a -> b + 1) 0
+  subFold (\b _ -> b + 1) 0
 
 pcount :: Monad m
   => Producer a m () -> Producer a m Int
@@ -299,6 +315,6 @@ test = do
 
 testIt :: IO ()
 testIt = runEffect $
-   finite' (each [1, 2, 3, 4, 5] >-> P.show)
+   finite' (each ([1, 2, 3, 4, 5] :: [Int]) >-> P.show)
    >-> test
    >-> P.print

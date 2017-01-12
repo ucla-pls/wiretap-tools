@@ -22,10 +22,13 @@ import           Data.Unique
 
 import qualified Data.List                        as L
 import qualified Data.Map                         as M
+import           Data.Maybe                       (fromMaybe, catMaybes)
 import qualified Data.Set                         as S
 
 import           Pipes
 import qualified Pipes.Prelude                    as P
+import qualified Pipes.Missing                    as PM
+import qualified Pipes.Lift                       as PL
 
 import           Wiretap.Analysis.Count
 import           Wiretap.Format.Binary
@@ -54,15 +57,25 @@ Usage:
 
 Options:
 -h, --human-readable           Adds more information about execution
+
 -P PROGRAM, --program PROGRAM  The path to the program information, the default
                                is the folder of the history if none is declared.
+
 -f FILTER, --filter FILTER     For use in a candidate analysis. The multible filters
                                can be added seperated by commas. See filters.
+
 -p PROVER, --prover PROVER     For use in a candidate analysis, if no prover is
                                provided, un verified candidates are produced.
--c, --chunk-size CHUNK_SIZE    For use to set a the size of the chunks, if not
-                               set the program will
+
 -o OUT, --proof OUT            Produces the proof in the following directory
+
+--chunk-size CHUNK_SIZE        For use to set a the size of the chunks, if not
+                               set the program will read the entier history.
+
+--chunk-offset CHUNK_OFFSET    Chunk offset is the number of elements dropped each
+                               after each chunk. The minimal offset is 1, and the
+                               maximal offset, which touches all events is the
+                               size.
 
 -v, --verbose                  Produce verbose outputs
 
@@ -92,7 +105,8 @@ data Config = Config
   , program       :: Maybe FilePath
   , history       :: Maybe FilePath
   , humanReadable :: Bool
-  , chunckSize    :: Maybe Int
+  , chunkSize    :: Maybe Int
+  , chunkOffset  :: Int
   } deriving (Show, Read)
 
 getArgOrExit :: Arguments -> Option -> IO String
@@ -122,7 +136,8 @@ readConfig args = do
     , outputProof = getLongOption "proof"
     , program = getLongOption "program"
     , history = getArgument "history"
-    , chunckSize = read <$> getLongOption "chunk-size"
+    , chunkSize = read <$> getLongOption "chunk-size"
+    , chunkOffset = fromMaybe 1 (read <$> getLongOption "chunk-offset")
     , humanReadable = args `isPresent` longOption "human-readable"
     }
   where
@@ -175,7 +190,6 @@ runCommand args config = do
        return . L.intercalate ";" . L.sort .
          L.map (L.intercalate "," . L.sort . L.map (pp p)) $ [as, bs]
 
-
     dataRaceToString p (DataRace l a b) | humanReadable config =
       return $ padStr a' ' ' 60 ++ padStr b' ' ' 60 ++ pp p l
       where [a', b'] = map (pp p) [a, b]
@@ -216,6 +230,7 @@ addProven a =
 
 type ProverT a m = EitherT String (StateT ProverState m)
 
+
 proveCandidates
   :: forall a m. (Candidate a, Show a, Ord a, MonadIO m)
   => Config
@@ -227,22 +242,47 @@ proveCandidates config generator toString events =
   runProver (ProverState S.empty)
 
   where
+
+    logV :: (MonadIO m') => String -> m' ()
+    logV = liftIO . when (verbose config) . hPutStrLn stderr
+
     runProver s =
-      flip evalStateT s $ do
-        runEffect $ for (chunck events) $ \e -> do
-          -- lift get >>= liftIO . print
-          lift $ chunckProver e
-          -- lift get >>= liftIO . print
+      runEffect $ chunkate events >->
+        (PL.evalStateP s . forever $ await >>= lift . chunkProver)
 
-    chunck es = do
-      h <- lift . lift $ fromEvents <$> P.toListM es
-      yield $ Wiretap.Data.History.enumerate h
+    chunkate :: Producer Event m () -> Producer [UE] m ()
+    chunkate es =
+      case chunkSize config of
+        Nothing -> do
+          -- Read the entire history
+          h <- lift $ fromEvents <$> P.toListM es
+          yield $ Wiretap.Data.History.enumerate h
+        Just size -> do
+          -- Read a little at a time
+          PM.finite' (es >-> PM.scan' (\i e -> (i+1, Unique i e)) 0)
+            >-> (getN size >>= go size)
+      where
+        offset = chunkOffset config
 
-    chunckProver
+        go size chunk = do
+          yield chunk
+          liftIO . when (verbose config) $ do
+            hPutStrLn stderr $ "Read Chunk of size: " ++ show actualChunkSize
+          if actualChunkSize < size
+            then return ()
+            else do
+              new <- getN offset
+              go size $ drop offset chunk ++ new
+          where actualChunkSize = length chunk
+
+        getN size = do
+          catMaybes <$> PM.asList (PM.take' size)
+
+    chunkProver
       :: forall h. (PartialHistory h)
       => h
       -> StateT ProverState m ()
-    chunckProver chunk =
+    chunkProver chunk =
       runEffect . for (generator chunk) $ \c ->  do
         -- lift get >>= liftIO . print
         lift $ candidateProver chunk c
