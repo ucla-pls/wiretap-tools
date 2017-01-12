@@ -1,5 +1,6 @@
 module Wiretap.Analysis.Lock
   ( deadlockCandidates
+  , deadlockCandidates'
   , locksetSimulation
   , locksetFilter
   , lockset
@@ -8,7 +9,6 @@ module Wiretap.Analysis.Lock
   )
 where
 
-import           Data.Function            (on)
 import qualified Data.List                as L
 import qualified Data.Map                 as M
 import           Data.Maybe
@@ -20,6 +20,7 @@ import           Wiretap.Data.History
 import           Wiretap.Utils
 
 import           Control.Monad
+import           Control.Lens (over, _1)
 import           Control.Monad.State
 import           Control.Monad.Trans.Either
 
@@ -31,18 +32,20 @@ import           Control.Monad.Trans.Either
 locksetSimulation :: PartialHistory h
   => M.Map Thread [(Ref, UE)]
   -> h
-  -> (UniqueMap [(Ref, UE)], M.Map Thread [(Ref, UE)])
+  -> (UniqueMap (M.Map Ref UE), M.Map Thread [(Ref, UE)])
 locksetSimulation s history =
-  (fromUniques locksets, state')
+  (fromUniques $ map (fmap toLockMap) lockstacks, state')
   where
-    (locksets, state') = runState (simulateM step history) s
+    (lockstacks, state') = runState (simulateM step history) s
+
+    filterFirst p = L.deleteBy (const p) undefined
 
     step u@(Unique _ e) =
       case operation e of
         Acquire l ->
           updateAndGet t ((l,u):)
         Release l ->
-          updateAndGet t $ L.filter ((l ==) . fst)
+          updateAndGet t . filterFirst $ (l ==) . fst
         _ ->
           gets $ fromMaybe [] . M.lookup t
       where t = thread e
@@ -57,9 +60,15 @@ locksetSimulation s history =
       put $ M.insert t rs m
       return rs
 
-sharedLocks :: UniqueMap [(Ref, UE)] -> UE -> UE -> [(Ref, UE)]
+    -- | toLockMap converges the lock stack to a map where all locks reference
+    -- | points to the first event to grab it.
+    toLockMap :: [(Ref, UE)] -> M.Map Ref UE
+    toLockMap =
+      M.fromList
+
+sharedLocks :: UniqueMap (M.Map Ref UE) -> UE -> UE -> M.Map Ref (UE, UE)
 sharedLocks u a b =
-  L.intersectBy ((==) `on` fst) (u ! a) (u ! b)
+  M.intersectionWith (,) (u ! a) (u ! b)
 
 locksetFilter
   :: (Candidate a, PartialHistory h, Monad m)
@@ -71,27 +80,28 @@ locksetFilter h =
 
 locksetFilter'
   :: (Candidate a, Monad m)
-  => UniqueMap [(Ref, UE)]
+  => UniqueMap (M.Map Ref UE)
   -> a
   -> EitherT String m a
-locksetFilter' lm a =
-  case uncurry (sharedLocks lm) $ toEventPair a of
-    [] -> return a
-    ls -> left $ "Candidates shares locks " ++ (show . L.nub $ map fst ls)
+locksetFilter' lm a = do
+  let shared = uncurry (sharedLocks lm) $ toEventPair a
+  if M.null shared
+    then return a
+    else left $ "Candidates shares locks " ++ show (M.keys shared)
 
 lockMap
   :: PartialHistory h
   => h
-  -> UniqueMap [(Ref, UE)]
+  -> UniqueMap (M.Map Ref UE)
 lockMap =
   fst . locksetSimulation M.empty
 
 lockset :: PartialHistory h
   => h
-  -> [(Event, [(Ref, UE)])]
+  -> [(Event, (M.Map Ref UE))]
 lockset h =
   map (\e -> (normal e, locks ! e)) $ enumerate h
-  where locks = fst $ locksetSimulation M.empty h
+  where locks = lockMap h
 
 -- | A deadlock edge is proof that there is exist an happen-before edge from the
 -- | acquirement of a lock to a request for another lock.
@@ -112,20 +122,31 @@ instance Candidate Deadlock where
   toEventPair dl =
     (dedgeRequest . edgeA $ dl, dedgeRequest . edgeB $ dl)
 
+deadlockCandidates'
+  :: PartialHistory h
+  => h
+  -> UniqueMap (M.Map Ref UE)
+  -> [Deadlock]
+deadlockCandidates' h lm =
+  catMaybes $ L.map getDeadlock pairs
+  where
+    pairs = combinations $ onRequests (,) h
+
+    -- Takes two requests and their locks and tries to create
+    -- two conflicting edges.
+    getDeadlock ((a, la), (b, lb)) =
+      liftM2 Deadlock (getEdge la b) (getEdge lb a)
+
+    -- From a lock an a request figure out if there is a
+    -- happens before access from acquire that acquired the
+    -- lock to the request.
+    getEdge l req = do
+      acq <- M.lookup l $ lm ! req
+      return $ DeadlockEdge l acq req
+
 deadlockCandidates :: PartialHistory h
   => M.Map Thread [(Ref, UE)]
   -> h
   -> ([Deadlock], M.Map Thread [(Ref, UE)])
 deadlockCandidates s h =
-  (catMaybes $ L.map getDeadlock pairs, state')
-  where
-    pairs = combinations $ onRequests (,) h
-
-    getDeadlock ((a, la), (b, lb)) =
-      liftM2 Deadlock (getEdge la b) (getEdge lb a)
-
-    getEdge l rel = do
-      (_, acq) <- L.find ((l ==) . fst) $ lm ! rel
-      return $ DeadlockEdge l acq rel
-
-    (lm, state') = locksetSimulation s h
+  over _1 (deadlockCandidates' h) $ locksetSimulation s h
