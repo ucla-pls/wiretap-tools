@@ -1,29 +1,34 @@
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes       #-}
-{-# LANGUAGE RankNTypes        #-}
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE QuasiQuotes         #-}
+{-# LANGUAGE RankNTypes          #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Main where
 
 import           System.Console.Docopt
 import           System.Directory
-import           System.Environment        (getArgs)
+import           System.Environment               (getArgs)
 import           System.FilePath
 import           System.IO
 
 import           Control.Applicative
-import           Control.Lens              (over, _2)
+import           Control.Lens                     (over, _2)
 import           Control.Monad
+import           Control.Monad.Trans.Either
+import           Control.Monad.Trans.State.Strict
 
 import           Data.Unique
 
-import qualified Data.List                 as L
-import qualified Data.Map                  as M
-import           Data.Maybe
-import qualified Data.Set                  as S
+import qualified Data.List                        as L
+import qualified Data.Map                         as M
+import           Data.Maybe                       (fromMaybe, catMaybes)
+import qualified Data.Set                         as S
 
 import           Pipes
-import qualified Pipes.Prelude             as P
+import qualified Pipes.Prelude                    as P
+import qualified Pipes.Missing                    as PM
+import qualified Pipes.Lift                       as PL
 
 import           Wiretap.Analysis.Count
 import           Wiretap.Format.Binary
@@ -32,10 +37,10 @@ import           Wiretap.Utils
 
 import           Wiretap.Data.Event
 import           Wiretap.Data.History
-import qualified Wiretap.Data.Program      as Program
+import qualified Wiretap.Data.Program             as Program
 
 import           Wiretap.Analysis.DataRace
-import           Wiretap.Analysis.LIA      hiding ((~>))
+import           Wiretap.Analysis.LIA             hiding ((~>))
 import           Wiretap.Analysis.Lock
 import           Wiretap.Analysis.Permute
 
@@ -52,13 +57,25 @@ Usage:
 
 Options:
 -h, --human-readable           Adds more information about execution
+
 -P PROGRAM, --program PROGRAM  The path to the program information, the default
                                is the folder of the history if none is declared.
+
 -f FILTER, --filter FILTER     For use in a candidate analysis. The multible filters
                                can be added seperated by commas. See filters.
--p PROVER, --prover PROVER     For use in a candidate analysis, if no prover is provided, un
-                               verified candidates are produced.
+
+-p PROVER, --prover PROVER     For use in a candidate analysis, if no prover is
+                               provided, un verified candidates are produced.
+
 -o OUT, --proof OUT            Produces the proof in the following directory
+
+--chunk-size CHUNK_SIZE        For use to set a the size of the chunks, if not
+                               set the program will read the entier history.
+
+--chunk-offset CHUNK_OFFSET    Chunk offset is the number of elements dropped each
+                               after each chunk. The minimal offset is 1, and the
+                               maximal offset, which touches all events is the
+                               size.
 
 -v, --verbose                  Produce verbose outputs
 
@@ -66,7 +83,8 @@ Filters:
 Filters are applicable to dataraces and deadlock analyses.
 
   lockset:   Remove all candidates with shared locks.
-  all:       Rejects all candidates
+  reject:    Rejects all candidates
+  uniqe:     Only try to prove each candidate once
 
 Provers:
 A prover is an algorithm turns a history into a constraint.
@@ -83,10 +101,12 @@ data Config = Config
   { verbose       :: Bool
   , prover        :: String
   , filters       :: [String]
-  , proof         :: Maybe FilePath
+  , outputProof   :: Maybe FilePath
   , program       :: Maybe FilePath
   , history       :: Maybe FilePath
   , humanReadable :: Bool
+  , chunkSize    :: Maybe Int
+  , chunkOffset  :: Int
   } deriving (Show, Read)
 
 getArgOrExit :: Arguments -> Option -> IO String
@@ -110,11 +130,14 @@ readConfig :: Arguments -> IO Config
 readConfig args = do
   return $ Config
     { verbose = isPresent args $ longOption "verbose"
-    , filters = fromMaybe [] $ splitOn ',' <$> getArg args (longOption "filter")
+    , filters = splitOn ','
+        $ getArgWithDefault args "unique,lockset" (longOption "filter")
     , prover = getArgWithDefault args "kalhauge" (longOption "prover")
-    , proof = getLongOption "proof"
+    , outputProof = getLongOption "proof"
     , program = getLongOption "program"
     , history = getArgument "history"
+    , chunkSize = read <$> getLongOption "chunk-size"
+    , chunkOffset = fromMaybe 1 (read <$> getLongOption "chunk-offset")
     , humanReadable = args `isPresent` longOption "human-readable"
     }
   where
@@ -145,15 +168,18 @@ runCommand args config = do
 
   onCommand "lockset" $ \events -> do
     locks <- lockset . fromEvents <$> P.toListM events
-    forM_ locks $ printLockset pprint . over _2 (L.intercalate "," . map pprint)
+    forM_ locks $ printLockset pprint . over _2 (L.intercalate "," . map pprint . M.assocs)
 
   onCommand "dataraces" $
     proveCandidates config
       (each . raceCandidates) $ dataRaceToString p
 
   onCommand "deadlocks" $
-    proveCandidates config
-      (each . fst . deadlockCandidates M.empty) $ deadlockToString p
+    proveCandidates config (
+      \s -> do
+        lm <- lift $ gets lockMap
+        each $ deadlockCandidates' s lm
+      ) $ deadlockToString p
 
   where
     getProgram cfg =
@@ -166,7 +192,6 @@ runCommand args config = do
        bs <- sequence . map (instruction p . normal) $ [bA, bR]
        return . L.intercalate ";" . L.sort .
          L.map (L.intercalate "," . L.sort . L.map (pp p)) $ [as, bs]
-
 
     dataRaceToString p (DataRace l a b) | humanReadable config =
       return $ padStr a' ' ' 60 ++ padStr b' ' ' 60 ++ pp p l
@@ -197,79 +222,152 @@ runCommand args config = do
     padStr p char size =
       p ++ L.replicate (size - length p) char
 
+type LockState = M.Map Thread [(Ref, UE)]
+
+data ProverState = ProverState
+  { proven :: S.Set String
+  , lockMap :: UniqueMap (M.Map Ref UE)
+  , lockState :: LockState
+  } deriving (Show)
+
+addProven :: String -> ProverState -> ProverState
+addProven a p =
+   p { proven = S.insert a $ proven p }
+
+updateLockState :: (LockState -> LockState) -> ProverState -> ProverState
+updateLockState f p =
+   p { lockState = f (lockState p) }
+
+setLockMap :: PartialHistory h => h -> ProverState -> ProverState
+setLockMap h p =
+  p { lockMap = fst $ locksetSimulation (lockState p) h }
+
+type ProverT m = StateT ProverState m
+
+
 proveCandidates
-  :: (Candidate a, MonadIO m)
+  :: forall a m. (Candidate a, Show a, Ord a, MonadIO m)
   => Config
-  -> (forall h. PartialHistory h => h -> Producer a m ())
+  -> (forall h . (PartialHistory h) => h -> Producer a (ProverT m) ())
   -> (a -> IO String)
   -> Producer Event m ()
   -> m ()
-proveCandidates config generator toString events = do
-  runEffect $ for (chunck events) chunckProver
+proveCandidates config generator toString events =
+  runEffect $ uniqueEvents >-> PL.evalStateP initialState proverPipe
+
   where
-    chunckProver hist =
-      for (generator hist) $
-       filterCandidate (getFilters hist)
-       ~> proveCandidate hist
-       ~> printProofs
+    initialState =
+      (ProverState S.empty (fromUniques []) M.empty)
 
-    filterCandidate filters' c =
-      case applyFilters c filters' of
-        Right c' -> yield c'
-        Left msg ->
-          liftIO $ when (verbose config) $ do
-            hPutStrLn stderr "Filtered candidate away:"
-            hPrint stderr =<< toString c
-            hPutStrLn stderr "The reason was:"
-            hPutStrLn stderr msg
+    logV :: (MonadIO m') => String -> m' ()
+    logV = liftIO . when (verbose config) . hPutStrLn stderr
 
-    proveCandidate h c = do
-      lift (prove h c) >>= \case
-        Right p -> yield p
-        Left msg -> liftIO $
+    uniqueEvents =
+       PM.finite' (events >-> PM.scan' (\i e -> (i+1, Unique i e)) 0)
+
+    proverPipe =
+      chunkate >-> forever (await >>= lift . chunkProver)
+
+    chunkate :: Pipe (Maybe UE) [UE] (ProverT m) ()
+    chunkate =
+      case chunkSize config of
+        Nothing -> do
+          -- Read the entire history
+          list <- PM.asList $ PM.recoverAll >-> PM.end'
+          yield list
+        Just size ->
+          -- Read a little at a time
+          getN size >>= go size
+      where
+        offset = chunkOffset config
+
+        go size chunk = do
+          lift . modify $ setLockMap chunk
+          -- lm <- lift $ gets lockMap
+          ls <- lift $ gets lockState
+          yield chunk
+          case chunk of
+              a:_ -> logV $
+                "At event " ++ show (idx a)
+                 -- ++ " " ++ show (L.length chunk)
+                 ++ " " ++ show (M.size ls)
+                -- ++ " " ++ show (IM.size . toIntMap $ lm)
+              [] -> return ()
+          if actualChunkSize < size
+            then logV $ "Done"
+            else do
+              new <- getN offset
+              let (dropped, remainder) = splitAt offset chunk
+              lift . modify $ updateLockState (\s -> snd $ locksetSimulation s dropped)
+              go size $ remainder ++ new
+          where actualChunkSize = length chunk
+
+        getN size = do
+          catMaybes <$> PM.asList (PM.take' size)
+
+    chunkProver
+      :: forall h. (PartialHistory h)
+      => h
+      -> StateT ProverState m ()
+    chunkProver chunk =
+      runEffect . for (generator chunk) $ \c ->  do
+        -- lift get >>= liftIO . print
+        lift $ candidateProver chunk c
+        -- lift get >>= liftIO . print
+
+    candidateProver hist c = do
+      result <- runEitherT $
+        runAll c (map getFilter $ filters config)
+        >>= permute (getProver $ prover config) hist
+      case result of
+        Left msg -> liftIO $ do
           when (verbose config) $ do
-            hPutStrLn stderr "Couldn't prove candidate"
-            hPrint stderr =<< toString c
+            hPutStrLn stderr "Could not prove candidate:"
+            hPutStr stderr "  " >> toString c >>= hPutStrLn stderr
             hPutStrLn stderr "The reason was:"
-            hPutStrLn stderr msg
+            hPutStr stderr "  " >> hPutStrLn stderr msg
+        Right proof -> do
+          str <- liftIO . toString $ candidate proof
+          modify $ addProven str
+          liftIO $ printProof proof
 
-    printProofs (Proof c _ hist) = liftIO $ do
+    printProof (Proof c _ hist) = do
       putStrLn =<< toString c
-      case proof config of
+      case outputProof config of
         Just folder -> do
           createDirectoryIfMissing True folder
           let (Unique ia _, Unique ib _) = toEventPair c
-          withFile (folder </> show ia ++ "-" ++ show ib ++ ".hist")
-              WriteMode $ \h ->
-            runEffect $ each hist >-> P.map normal >-> writeHistory h
+          withFile (folder </> show ia ++ "-" ++ show ib ++ ".hist") WriteMode $
+            \h -> runEffect $ each hist >-> P.map normal >-> writeHistory h
         Nothing ->
           return ()
 
-    getFilters history' =
-      map go (filters config)
-      where
-        go "lockset" =
-          locksetFilter history'
-        go "all" =
-          const $ Left "Rejected"
-        go name =
+    getFilter name =
+      case name of
+        "lockset" -> \c -> do
+          lm <- lift $ gets lockMap
+          locksetFilter' lm c
+        "reject" ->
+          const $ left "Rejected"
+        "unique" -> \c -> do
+          str <- liftIO $ toString c
+          alreadyProven <- lift $ gets (S.member str . proven)
+          if alreadyProven
+            then left "Already proven"
+            else return c
+        _ ->
           error $ "Unknown filter " ++ name
 
-    applyFilters c =
-      L.foldl' (>>=) (pure c)
+    getProver name =
+      case name of
+        "said"     -> said
+        "kalhauge" -> kalhauge
+        "free"     -> free
+        "none"     -> none
+        _          -> error $ "Unknown prover: '" ++ name ++ "'"
 
-    prove =
-      permute $
-        case (prover config) of
-          "said"     -> said
-          "kalhauge" -> kalhauge
-          "free"     -> free
-          "none"     -> none
-          name       -> error $ "Unknown prover: '" ++ name ++ "'"
-
-    chunck es = do
-      h <- lift $ fromEvents <$> P.toListM es
-      yield $ Wiretap.Data.History.enumerate h
+runAll :: (Monad m') => a -> [a -> m' a] -> m' a
+runAll a = L.foldl' (>>=) $ pure a
 
 cnf2dot
   :: PartialHistory h

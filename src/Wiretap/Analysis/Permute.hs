@@ -11,8 +11,6 @@ module Wiretap.Analysis.Permute
 
   , Candidate(..)
   , Proof(..)
-  , Result
-  , failedToProve
 
   , (~/>)
   , (~/~)
@@ -23,6 +21,7 @@ import           Prelude                hiding (reads)
 
 import           Control.Lens           hiding (none)
 import           Control.Monad.IO.Class
+import           Control.Monad.Trans.Either
 
 import qualified Data.List              as L
 import qualified Data.Map               as M
@@ -234,17 +233,29 @@ controlFlowConsistency us h =
       visited `S.union` depends
 
     readConsitency r (l, v) =
-      Or
-      [ And $ consistent visited' (cfc w) : w ~> r :
-        [ Or [ w' ~> w, r ~> w']
-        | (_, w') <- rwrites
-        , w' /= w , w' ~/> w, r ~/> w'
-        ]
-      | (v', w) <- rwrites
-      , v' == v , r ~/> w
-      ]
-      where
-        rwrites = writes M.! l
+      -- Make sure that location has any writes
+      case M.lookup l writes of
+        Nothing ->
+          -- If no writes assume that the read is consistent, ei. Reads what it
+          -- is supposed to.
+          And []
+        Just rwrites ->
+          case [ w | (v', w) <- rwrites, v' == v, r ~/> w ] of
+            [] ->
+              -- If there is no writes with the same value, that not is ordered
+              -- after the read, then assume that the read must be reading
+              -- something that was written before, ei. ordered before all other writes.
+              -- NOTE: This assumption requires the history to be consistent.
+              And [ r ~> w' | (_, w') <- rwrites ]
+            rvwrites ->
+              Or
+              [ And $ consistent visited' (cfc w) : w ~> r :
+                [ Or [ w' ~> w, r ~> w']
+                | (_, w') <- rwrites
+                , w' /= w , w' ~/> w, r ~/> w'
+                ]
+              | w <- rvwrites
+              ]
 
     lockConsitency a ref' =
       -- Any acquire we test is already controlFlowConsistent, covered by the
@@ -273,8 +284,11 @@ controlFlowConsistency us h =
           , a' `S.member` visited'
           ]
       where
-        (dr, pairs, da) = lockPairsWithRef M.! ref'
-
+        (dr, pairs, da) = case M.lookup ref' lockPairsWithRef of
+          Just pairs' -> pairs'
+          Nothing ->
+            error $ "The ref " ++ show ref'
+                 ++ " has no lock-pairs. (Should not happen)"
   writes =
     mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
 
@@ -323,16 +337,6 @@ data Proof a = Proof
   , evidence    :: [UE]
   } deriving Functor
 
-type Result a = Either String (Proof a)
-
-withProof :: a -> LIA UE -> [UE] -> Result a
-withProof a c p =
-  Right $ Proof a c p
-
-failedToProve :: String -> Result a
-failedToProve =
-  Left
-
 type Prover = forall h . PartialHistory h => h -> (UE, UE) -> LIA UE
 
 {-| permute takes partial history and two events, if the events can be arranged
@@ -342,14 +346,14 @@ permute
   => Prover
   -> h
   -> a
-  -> m (Result a)
+  -> EitherT String m (Proof a)
 permute prover h a = do
   solution <- solve (enumerate h) cnts
   case solution of
     Just hist ->
-      return $ withProof a cnts (withPair pair hist)
+      return $ Proof a cnts (withPair pair hist)
     Nothing ->
-      return $ failedToProve "Could not solve the constraints."
+      left "Could not solve the constraints."
   where
     pair = toEventPair a
     cnts = prover h pair
