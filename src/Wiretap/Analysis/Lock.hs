@@ -1,8 +1,10 @@
+{-# LANGUAGE BangPatterns #-}
 module Wiretap.Analysis.Lock
   ( deadlockCandidates
   , deadlockCandidates'
   , locksetSimulation
   , locksetFilter
+  , locksetFilter'
   , lockset
   , DeadlockEdge(..)
   , Deadlock(..)
@@ -10,7 +12,7 @@ module Wiretap.Analysis.Lock
 where
 
 import qualified Data.List                as L
-import qualified Data.Map                 as M
+import qualified Data.Map.Strict          as M
 import           Data.Maybe
 import           Data.Unique
 
@@ -21,7 +23,7 @@ import           Wiretap.Utils
 
 import           Control.Monad
 import           Control.Lens (over, _1)
-import           Control.Monad.State
+import           Control.Monad.State.Strict
 import           Control.Monad.Trans.Either
 
 -- | Lockset simulation, walks over a history and calculates the lockset
@@ -76,7 +78,7 @@ locksetFilter
   -> a
   -> EitherT String m a
 locksetFilter h =
-  locksetFilter' $! lockMap h
+  locksetFilter' $ lockMap h
 
 locksetFilter'
   :: (Candidate a, Monad m)
@@ -135,7 +137,9 @@ deadlockCandidates' h lm =
     -- Takes two requests and their locks and tries to create
     -- two conflicting edges.
     getDeadlock ((a, la), (b, lb)) =
-      liftM2 Deadlock (getEdge la b) (getEdge lb a)
+      if (thread . normal $ a) == (thread . normal $ b)
+         then Nothing
+         else liftM2 Deadlock (getEdge la b) (getEdge lb a)
 
     -- From a lock an a request figure out if there is a
     -- happens before access from acquire that acquired the

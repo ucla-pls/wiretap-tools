@@ -6,20 +6,6 @@ import           Pipes
 import qualified Pipes.Prelude as P
 
 
-scan'
-  :: Monad m
-  => (x -> a -> (x, b))
-  -> x
-  -> Pipe a b m r
-scan' step begin = go begin
-  where
-    go x = do
-      a <- await
-      let (x', b) = step x a
-      yield b
-      go $! x'
-
-
 done :: Monad m
   => a
   -> Producer' (Either a b) m r'
@@ -111,6 +97,19 @@ merge' :: Monad m
 merge' =
   merge (const $ const ())
 
+scan'
+  :: Monad m
+  => (x -> a -> (x, b))
+  -> x
+  -> Pipe a b m r
+scan' step begin = go begin
+  where
+    go x = do
+      a <- await
+      let (x', b) = step x a
+      yield b
+      go $! x'
+
 {-| Every subpipe is created from the SubProxy, which is esentially just a proxy
 with a proxy monad.
 -}
@@ -192,6 +191,11 @@ sample = do
     yield x
     return x
   yield x
+
+recoverAll :: Monad m
+  => SubROProducer' b b m r
+recoverAll =
+  forever recover
 
 dispatchAll :: Monad m
   => SubWOConsumer' b b m r
@@ -279,12 +283,11 @@ takeWhileS :: Monad m
   => (a -> Bool) -> SubROProducer' a a m a
 takeWhileS f = do
   a <- receive
-  case (f a) of
-    True -> do
+  if f a
+    then do
       yield a
       takeWhileS f
-    False ->
-      return a
+    else return a
 
 asList :: Monad m
   => SubProducer' x' x y' y a m ()

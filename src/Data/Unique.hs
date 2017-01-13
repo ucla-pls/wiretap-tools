@@ -33,8 +33,8 @@ newtype UniqueMap a = UniqueMap
 
 {-| Assumes that unique is from to  -}
 fromUniques :: [Unique a] -> UniqueMap a
-fromUniques =
-  UniqueMap . M.fromDistinctAscList . map toPair
+fromUniques lst =
+  UniqueMap $! M.fromDistinctAscList (map toPair lst)
 
 (!) :: UniqueMap a -> Unique b -> a
 m ! u = toIntMap m M.! idx u

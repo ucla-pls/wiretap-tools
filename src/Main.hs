@@ -168,15 +168,18 @@ runCommand args config = do
 
   onCommand "lockset" $ \events -> do
     locks <- lockset . fromEvents <$> P.toListM events
-    forM_ locks $ printLockset pprint . over _2 (L.intercalate "," . map pprint)
+    forM_ locks $ printLockset pprint . over _2 (L.intercalate "," . map pprint . M.assocs)
 
   onCommand "dataraces" $
     proveCandidates config
       (each . raceCandidates) $ dataRaceToString p
 
   onCommand "deadlocks" $
-    proveCandidates config
-      (each . fst . deadlockCandidates M.empty) $ deadlockToString p
+    proveCandidates config (
+      \s -> do
+        lm <- lift $ gets lockMap
+        each $ deadlockCandidates' s lm
+      ) $ deadlockToString p
 
   where
     getProgram cfg =
@@ -219,61 +222,84 @@ runCommand args config = do
     padStr p char size =
       p ++ L.replicate (size - length p) char
 
+type LockState = M.Map Thread [(Ref, UE)]
 
 data ProverState = ProverState
   { proven :: S.Set String
+  , lockMap :: UniqueMap (M.Map Ref UE)
+  , lockState :: LockState
   } deriving (Show)
 
 addProven :: String -> ProverState -> ProverState
-addProven a =
-  ProverState . S.insert a . proven
+addProven a p =
+   p { proven = S.insert a $ proven p }
 
-type ProverT a m = EitherT String (StateT ProverState m)
+updateLockState :: (LockState -> LockState) -> ProverState -> ProverState
+updateLockState f p =
+   p { lockState = f (lockState p) }
+
+setLockMap :: PartialHistory h => h -> ProverState -> ProverState
+setLockMap h p =
+  p { lockMap = fst $ locksetSimulation (lockState p) h }
+
+type ProverT m = StateT ProverState m
 
 
 proveCandidates
   :: forall a m. (Candidate a, Show a, Ord a, MonadIO m)
   => Config
-  -> (forall h m'. (MonadIO m', PartialHistory h) => h -> Producer a m' ())
+  -> (forall h . (PartialHistory h) => h -> Producer a (ProverT m) ())
   -> (a -> IO String)
   -> Producer Event m ()
   -> m ()
 proveCandidates config generator toString events =
-  runProver (ProverState S.empty)
+  runEffect $ uniqueEvents >-> PL.evalStateP initialState proverPipe
 
   where
+    initialState =
+      (ProverState S.empty (fromUniques []) M.empty)
 
     logV :: (MonadIO m') => String -> m' ()
     logV = liftIO . when (verbose config) . hPutStrLn stderr
 
-    runProver s =
-      runEffect $ chunkate events >->
-        (PL.evalStateP s . forever $ await >>= lift . chunkProver)
+    uniqueEvents =
+       PM.finite' (events >-> PM.scan' (\i e -> (i+1, Unique i e)) 0)
 
-    chunkate :: Producer Event m () -> Producer [UE] m ()
-    chunkate es =
+    proverPipe =
+      chunkate >-> forever (await >>= lift . chunkProver)
+
+    chunkate :: Pipe (Maybe UE) [UE] (ProverT m) ()
+    chunkate =
       case chunkSize config of
         Nothing -> do
           -- Read the entire history
-          h <- lift $ fromEvents <$> P.toListM es
-          yield $ Wiretap.Data.History.enumerate h
-        Just size -> do
+          list <- PM.asList $ PM.recoverAll >-> PM.end'
+          yield list
+        Just size ->
           -- Read a little at a time
-          PM.finite' (es >-> PM.scan' (\i e -> (i+1, Unique i e)) 0)
-            >-> (getN size >>= go size)
+          getN size >>= go size
       where
         offset = chunkOffset config
 
         go size chunk = do
+          lift . modify $ setLockMap chunk
+          -- lm <- lift $ gets lockMap
+          ls <- lift $ gets lockState
           yield chunk
           case chunk of
-              a:_ -> logV $ "At event " ++ show (idx a)
+              a:_ -> logV $
+                "At event " ++ show (idx a)
+                 -- ++ " " ++ show (L.length chunk)
+                 ++ " " ++ show (M.size ls)
+                -- ++ " " ++ show (IM.size . toIntMap $ lm)
               [] -> return ()
           if actualChunkSize < size
             then logV $ "Done"
             else do
               new <- getN offset
-              go size $ drop offset chunk ++ new
+              let (dropped, remainder) = splitAt offset chunk
+              lift . modify $ updateLockState (\s -> snd $ locksetSimulation s dropped)
+              go size $ remainder ++ new
           where actualChunkSize = length chunk
 
         getN size = do
@@ -291,7 +317,7 @@ proveCandidates config generator toString events =
 
     candidateProver hist c = do
       result <- runEitherT $
-        runAll c (map (getFilter hist) $ filters config)
+        runAll c (map getFilter $ filters config)
         >>= permute (getProver $ prover config) hist
       case result of
         Left msg -> liftIO $ do
@@ -316,10 +342,11 @@ proveCandidates config generator toString events =
         Nothing ->
           return ()
 
-    getFilter history' name =
+    getFilter name =
       case name of
-        "lockset" ->
-          locksetFilter history'
+        "lockset" -> \c -> do
+          lm <- lift $ gets lockMap
+          locksetFilter' lm c
         "reject" ->
           const $ left "Rejected"
         "unique" -> \c -> do
