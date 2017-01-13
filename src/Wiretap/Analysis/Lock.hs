@@ -35,10 +35,10 @@ locksetSimulation :: PartialHistory h
   => M.Map Thread [(Ref, UE)]
   -> h
   -> (UniqueMap (M.Map Ref UE), M.Map Thread [(Ref, UE)])
-locksetSimulation s history =
+locksetSimulation !s history =
   (fromUniques $ map (fmap toLockMap) lockstacks, state')
   where
-    (lockstacks, state') = runState (simulateM step history) s
+    (lockstacks, !state') = runState (simulateM step history) s
 
     filterFirst p = L.deleteBy (const p) undefined
 
@@ -59,7 +59,7 @@ locksetSimulation s history =
     updateAndGet t f = do
       m <- get
       let rs = f . fromMaybe [] $ M.lookup t m
-      put $ M.insert t rs m
+      put $! M.insert t rs m
       return rs
 
     -- | toLockMap converges the lock stack to a map where all locks reference

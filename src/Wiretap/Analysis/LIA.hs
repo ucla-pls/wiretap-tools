@@ -77,16 +77,21 @@ product f as bs =
 
 {-| solve takes a vector of elements and logic constraints
 
-This function assumes that the list of unique
+This function assumes that the list of unique's contains all
+the elements in the LIA, and that the uniq list distinct in it's
+id and strictly ascending.
 -}
-solve :: MonadIO m
+solve :: (MonadIO m, Show e)
   => [Unique e]
   -> LIA (Unique e)
   -> m (Maybe [Unique e])
 solve elems lia = liftIO $ evalZ3 $ do
-  vars <- IM.fromDistinctAscList <$>
-    mapM (\e -> (idx e,) <$> mkFreshIntVar "O") elems
-  ast <- toZ3 (\e -> vars IM.! idx e) lia
+  -- Create variables for all the elements in the list.
+  vars <- IM.fromDistinctAscList
+    <$> mapM (\e -> (idx e,) <$> mkFreshIntVar "O") elems
+
+  -- Convert the LIA to a Z3 ast using the vars.
+  ast <- toZ3 (lookupOrBreak vars) lia
 
   assert ast
 
@@ -97,6 +102,12 @@ solve elems lia = liftIO $ evalZ3 $ do
        return . Just $ L.sortOn (\e -> assignment IM.! idx e) elems
     Nothing ->
       return Nothing
+
+  where
+    lookupOrBreak vars e =
+      case IM.lookup (idx e) vars of
+        Just var -> var
+        Nothing -> error $ "Could not find " ++ show e ++ " in vars."
 
 toZ3 :: MonadZ3 m
   => (e -> AST)

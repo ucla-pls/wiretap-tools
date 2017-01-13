@@ -37,4 +37,8 @@ fromUniques lst =
   UniqueMap $! M.fromDistinctAscList (map toPair lst)
 
 (!) :: UniqueMap a -> Unique b -> a
-m ! u = toIntMap m M.! idx u
+m ! u =
+  case M.lookup (idx u) $ toIntMap m of
+    Just a -> a
+    Nothing ->
+      error $ "Could not find " ++ (show $ idx u) ++ " in UniqueMap."

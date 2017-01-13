@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE OverloadedStrings   #-}
@@ -19,16 +20,15 @@ import           Control.Monad.Trans.Either
 import           Control.Monad.Trans.State.Strict
 
 import           Data.Unique
-
 import qualified Data.List                        as L
-import qualified Data.Map                         as M
-import           Data.Maybe                       (fromMaybe, catMaybes)
+import qualified Data.Map.Strict                  as M
+import           Data.Maybe                       (catMaybes, fromMaybe)
 import qualified Data.Set                         as S
 
 import           Pipes
-import qualified Pipes.Prelude                    as P
-import qualified Pipes.Missing                    as PM
 import qualified Pipes.Lift                       as PL
+import qualified Pipes.Missing                    as PM
+import qualified Pipes.Prelude                    as P
 
 import           Wiretap.Analysis.Count
 import           Wiretap.Format.Binary
@@ -105,8 +105,8 @@ data Config = Config
   , program       :: Maybe FilePath
   , history       :: Maybe FilePath
   , humanReadable :: Bool
-  , chunkSize    :: Maybe Int
-  , chunkOffset  :: Int
+  , chunkSize     :: Maybe Int
+  , chunkOffset   :: Int
   } deriving (Show, Read)
 
 getArgOrExit :: Arguments -> Option -> IO String
@@ -225,18 +225,18 @@ runCommand args config = do
 type LockState = M.Map Thread [(Ref, UE)]
 
 data ProverState = ProverState
-  { proven :: S.Set String
-  , lockMap :: UniqueMap (M.Map Ref UE)
-  , lockState :: LockState
+  { proven    :: !(S.Set String)
+  , lockMap   :: !(UniqueMap (M.Map Ref UE))
+  , lockState :: !(LockState)
   } deriving (Show)
 
 addProven :: String -> ProverState -> ProverState
 addProven a p =
    p { proven = S.insert a $ proven p }
 
-updateLockState :: (LockState -> LockState) -> ProverState -> ProverState
-updateLockState f p =
-   p { lockState = f (lockState p) }
+updateLockState :: PartialHistory h => h -> ProverState -> ProverState
+updateLockState h p =
+   p { lockState = snd $! locksetSimulation (lockState p) h }
 
 setLockMap :: PartialHistory h => h -> ProverState -> ProverState
 setLockMap h p =
@@ -274,6 +274,7 @@ proveCandidates config generator toString events =
         Nothing -> do
           -- Read the entire history
           list <- PM.asList $ PM.recoverAll >-> PM.end'
+          lift . modify $ setLockMap list
           yield list
         Just size ->
           -- Read a little at a time
@@ -282,23 +283,18 @@ proveCandidates config generator toString events =
         offset = chunkOffset config
 
         go size chunk = do
-          lift . modify $ setLockMap chunk
-          -- lm <- lift $ gets lockMap
-          ls <- lift $ gets lockState
-          yield chunk
           case chunk of
-              a:_ -> logV $
-                "At event " ++ show (idx a)
-                 -- ++ " " ++ show (L.length chunk)
-                 ++ " " ++ show (M.size ls)
-                -- ++ " " ++ show (IM.size . toIntMap $ lm)
+              a:_ -> logV $ "At event " ++ show (idx a)
               [] -> return ()
+          lift . modify $ setLockMap chunk
+          !_ <- lift $ gets lockState
+          yield chunk
           if actualChunkSize < size
             then logV $ "Done"
             else do
               new <- getN offset
               let (dropped, remainder) = splitAt offset chunk
-              lift . modify $ updateLockState (\s -> snd $ locksetSimulation s dropped)
+              lift . modify $ updateLockState dropped
               go size $ remainder ++ new
           where actualChunkSize = length chunk
 
