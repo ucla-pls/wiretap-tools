@@ -15,9 +15,11 @@ import qualified Data.List                as L
 import qualified Data.Map.Strict          as M
 import           Data.Maybe
 import           Data.Unique
+import           Wiretap.Format.Text
 
 import           Wiretap.Analysis.Permute
 import           Wiretap.Data.Event
+import qualified Wiretap.Data.Program as Program
 import           Wiretap.Data.History
 import           Wiretap.Utils
 
@@ -76,7 +78,7 @@ locksetFilter
   :: (Candidate a, PartialHistory h, Monad m)
   => h
   -> a
-  -> EitherT String m a
+  -> EitherT (Program.Program -> IO String) m a
 locksetFilter h =
   locksetFilter' $ lockMap h
 
@@ -84,12 +86,22 @@ locksetFilter'
   :: (Candidate a, Monad m)
   => UniqueMap (M.Map Ref UE)
   -> a
-  -> EitherT String m a
-locksetFilter' lm a = do
-  let shared = uncurry (sharedLocks lm) $ toEventPair a
+  -> EitherT (Program.Program -> IO String) m a
+locksetFilter' lm c = do
+  let shared = uncurry (sharedLocks lm) $ toEventPair c
   if M.null shared
-    then return a
-    else left $ "Candidates shares locks " ++ show (M.keys shared)
+    then return c
+    else left $ \p -> do
+      locks <- forM (M.assocs shared) $ \(r, (a, b)) -> do
+        inst_a <- instruction p . normal $ a
+        inst_b <- instruction p . normal $ b
+        return $ L.intercalate "\n"
+          [ "    " ++ pp p r
+          , "      " ++ pp p inst_a
+          , "      " ++ pp p inst_b
+          ]
+      return . L.intercalate "\n" $
+        "Candidates shares locks:" : locks
 
 lockMap
   :: PartialHistory h

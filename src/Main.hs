@@ -171,11 +171,11 @@ runCommand args config = do
     forM_ locks $ printLockset pprint . over _2 (L.intercalate "," . map pprint . M.assocs)
 
   onCommand "dataraces" $
-    proveCandidates config
+    proveCandidates config p
       (each . raceCandidates) $ dataRaceToString p
 
   onCommand "deadlocks" $
-    proveCandidates config (
+    proveCandidates config p (
       \s -> do
         lm <- lift $ gets lockMap
         each $ deadlockCandidates' s lm
@@ -248,19 +248,19 @@ type ProverT m = StateT ProverState m
 proveCandidates
   :: forall a m. (Candidate a, Show a, Ord a, MonadIO m)
   => Config
+  -> Program.Program
   -> (forall h . (PartialHistory h) => h -> Producer a (ProverT m) ())
   -> (a -> IO String)
   -> Producer Event m ()
   -> m ()
-proveCandidates config generator toString events =
+proveCandidates config p generator toString events =
   runEffect $ uniqueEvents >-> PL.evalStateP initialState proverPipe
 
   where
     initialState =
       (ProverState S.empty (fromUniques []) M.empty)
 
-    logV :: (MonadIO m') => String -> m' ()
-    logV = liftIO . when (verbose config) . hPutStrLn stderr
+    logV = hPutStrLn stderr
 
     uniqueEvents =
        PM.finite' (events >-> PM.scan' (\i e -> (i+1, Unique i e)) 0)
@@ -283,14 +283,22 @@ proveCandidates config generator toString events =
         offset = chunkOffset config
 
         go size chunk = do
-          case chunk of
-              a:_ -> logV $ "At event " ++ show (idx a)
-              [] -> return ()
+          !ls <- lift $ gets lockState
+          liftIO . when (verbose config) $
+            case chunk of
+                a:_ -> do
+                  logV $ "At event " ++ show (idx a)
+                  forM_ (M.assocs ls) $ \(t, locks) -> when (not $ L.null locks) $ do
+                    logV $ (pp p t) ++ " has locks from:"
+                    forM_ locks $ \(r, event) -> do
+                      _event <- pp p <$> instruction p (normal event)
+                      logV $ "  " ++ pp p r ++ "  " ++ _event
+                [] -> return ()
           lift . modify $ setLockMap chunk
-          !_ <- lift $ gets lockState
           yield chunk
           if actualChunkSize < size
-            then logV $ "Done"
+            then
+              liftIO . when (verbose config) $ logV "Done"
             else do
               new <- getN offset
               let (dropped, remainder) = splitAt offset chunk
@@ -314,14 +322,15 @@ proveCandidates config generator toString events =
     candidateProver hist c = do
       result <- runEitherT $
         runAll c (map getFilter $ filters config)
-        >>= permute (getProver $ prover config) hist
+        >>= bimapEitherT (const . return) id . permute (getProver $ prover config) hist
       case result of
         Left msg -> liftIO $ do
           when (verbose config) $ do
             hPutStrLn stderr "Could not prove candidate:"
             hPutStr stderr "  " >> toString c >>= hPutStrLn stderr
             hPutStrLn stderr "The reason was:"
-            hPutStr stderr "  " >> hPutStrLn stderr msg
+            msg' <- msg p
+            hPutStr stderr "  " >> hPutStrLn stderr msg'
         Right proof -> do
           str <- liftIO . toString $ candidate proof
           modify $ addProven str
@@ -344,12 +353,12 @@ proveCandidates config generator toString events =
           lm <- lift $ gets lockMap
           locksetFilter' lm c
         "reject" ->
-          const $ left "Rejected"
+          const . left . const . return $ "Rejected"
         "unique" -> \c -> do
           str <- liftIO $ toString c
           alreadyProven <- lift $ gets (S.member str . proven)
           if alreadyProven
-            then left "Already proven"
+            then left . const . return $ "Already proven"
             else return c
         _ ->
           error $ "Unknown filter " ++ name
