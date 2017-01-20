@@ -25,13 +25,18 @@ import           Control.Monad.Trans.Either
 
 import qualified Data.List              as L
 import qualified Data.Map               as M
-import           Data.PartialOrder
 import qualified Data.Set               as S
 import           Data.Unique
+import           Data.Maybe (catMaybes)
+import           Control.Monad
 
 import           Wiretap.Analysis.LIA
+
 import           Wiretap.Data.Event
+import           Wiretap.Data.Proof
 import           Wiretap.Data.History
+
+import           Wiretap.Analysis.Lock
 
 import           Wiretap.Utils
 
@@ -213,17 +218,18 @@ controlFlowDependencies h u =
 
 controlFlowConsistency
   :: PartialHistory h
-  => [UE]
+  => LockMap
+  -> [UE]
   -> h
   -> LIA UE
-controlFlowConsistency us h =
+controlFlowConsistency lm us h =
   consistent (S.empty) (S.unions [ cfc u | u <- us ])
   where
   cfc u = S.fromAscList (controlFlowDependencies h u)
 
   consistent visited deps =
     And [ And $ onReads readConsitency depends
-        , And $ onAcquires lockConsitency depends
+        , And $ onNonReentrantAcquires lockConsitency depends
         ]
     where
     depends =
@@ -292,6 +298,12 @@ controlFlowConsistency us h =
   writes =
     mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
 
+  onNonReentrantAcquires f deps =
+    catMaybes $ onAcquires (\e l -> do
+      guard $ nonreentrant lm e l
+      return $ f e l
+     ) deps
+
   locksWithRef =
     mapOnFst $ onEvent filter' (flip (,)) h
     where
@@ -318,27 +330,6 @@ controlFlowConsistency us h =
             (u:dr, pairs, da)
           _ -> s
 
-
-(~/>) :: UE -> UE -> Bool
-(~/>) (Unique _ a) (Unique _ b) =
-  not (a !< b)
-
-(~/~) :: UE -> UE -> Bool
-(~/~) a b =
-  a ~/> b && b ~/> a
-
-
-class Candidate a where
-  toEventPair :: a -> (UE, UE)
-
-data Proof a = Proof
-  { candidate   :: a
-  , constraints :: LIA UE
-  , evidence    :: [UE]
-  } deriving Functor
-
-type Prover = forall h . PartialHistory h => h -> (UE, UE) -> LIA UE
-
 {-| permute takes partial history and two events, if the events can be arranged
 next to each other return. -}
 permute
@@ -346,14 +337,14 @@ permute
   => Prover
   -> h
   -> a
-  -> EitherT String m (Proof a)
+  -> EitherT (LIA UE) m (Proof a)
 permute prover h a = do
   solution <- solve (enumerate h) cnts
   case solution of
     Just hist ->
       return $ Proof a cnts (withPair pair hist)
     Nothing ->
-      left "Could not solve the constraints."
+      left cnts
   where
     pair = toEventPair a
     cnts = prover h pair
@@ -363,10 +354,10 @@ said h (a, b) =
   And $ Eq a b :
     ([ sc, mhb, lc, rwc ] <*> [h])
 
-kalhauge :: Prover
-kalhauge h (a, b) =
+kalhauge :: LockMap -> Prover
+kalhauge lm h (a, b) =
   And $ Eq a b :
-    ([ sc, mhb, controlFlowConsistency [a, b]] <*> [h])
+    ([ sc, mhb, controlFlowConsistency lm [a, b]] <*> [h])
 
 free :: Prover
 free h (a, b) =

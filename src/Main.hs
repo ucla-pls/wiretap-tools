@@ -1,4 +1,4 @@
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE BangPatterns        #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE OverloadedStrings   #-}
@@ -19,11 +19,12 @@ import           Control.Monad
 import           Control.Monad.Trans.Either
 import           Control.Monad.Trans.State.Strict
 
-import           Data.Unique
 import qualified Data.List                        as L
 import qualified Data.Map.Strict                  as M
 import           Data.Maybe                       (catMaybes, fromMaybe)
 import qualified Data.Set                         as S
+import           Data.Traversable                 (mapM)
+import           Data.Unique
 
 import           Pipes
 import qualified Pipes.Lift                       as PL
@@ -187,11 +188,13 @@ runCommand args config = do
         program config <|> fmap takeDirectory (history cfg)
 
     deadlockToString :: Program.Program -> Deadlock -> IO String
-    deadlockToString p (Deadlock (DeadlockEdge _ aA aR) (DeadlockEdge _ bA bR)) = do
-       as <- sequence . map (instruction p . normal) $ [aA, aR]
-       bs <- sequence . map (instruction p . normal) $ [bA, bR]
-       return . L.intercalate ";" . L.sort .
-         L.map (L.intercalate "," . L.sort . L.map (pp p)) $ [as, bs]
+    deadlockToString p (Deadlock a b) = do
+      L.intercalate ";" . L.sort <$> forM [a, b] edgeToString
+      where
+        edgeToString (DeadlockEdge ref' acq rel) = do
+          as <- forM [acq, rel] $ instruction p . normal
+          return . L.intercalate "," $ pp p ref':L.map (pp p) as
+
 
     dataRaceToString p (DataRace l a b) | humanReadable config =
       return $ padStr a' ' ' 60 ++ padStr b' ' ' 60 ++ pp p l
@@ -243,7 +246,6 @@ setLockMap h p =
   p { lockMap = fst $ locksetSimulation (lockState p) h }
 
 type ProverT m = StateT ProverState m
-
 
 proveCandidates
   :: forall a m. (Candidate a, Show a, Ord a, MonadIO m)
@@ -319,22 +321,38 @@ proveCandidates config p generator toString events =
         lift $ candidateProver chunk c
         -- lift get >>= liftIO . print
 
+    first f = bimapEitherT f id
+
     candidateProver hist c = do
+      lm <- gets lockMap
       result <- runEitherT $
         runAll c (map getFilter $ filters config)
-        >>= bimapEitherT (const . return) id . permute (getProver $ prover config) hist
+        >>= first (onProverError hist c)
+          . permute (getProver lm $ prover config) hist
       case result of
         Left msg -> liftIO $ do
           when (verbose config) $ do
             hPutStrLn stderr "Could not prove candidate:"
             hPutStr stderr "  " >> toString c >>= hPutStrLn stderr
             hPutStrLn stderr "The reason was:"
-            msg' <- msg p
+            msg' <- msg
             hPutStr stderr "  " >> hPutStrLn stderr msg'
         Right proof -> do
           str <- liftIO . toString $ candidate proof
           modify $ addProven str
           liftIO $ printProof proof
+
+    onProverError hist c cnts = do
+      case outputProof config of
+        Just folder -> do
+          createDirectoryIfMissing True folder
+          let (Unique ia _, Unique ib _) = toEventPair c
+              file = folder </> show ia ++ "-" ++ show ib ++ ".err.dot"
+          withFile file WriteMode $ \h ->
+            hPutStr h $ cnf2dot p hist (toCNF cnts)
+          return $ "Could solve constraints, outputted to '" ++ file ++ "'"
+        Nothing -> do
+          return "Could not solve constraints."
 
     printProof (Proof c _ hist) = do
       putStrLn =<< toString c
@@ -351,22 +369,33 @@ proveCandidates config p generator toString events =
       case name of
         "lockset" -> \c -> do
           lm <- lift $ gets lockMap
-          locksetFilter' lm c
+          first (\shared -> do
+              locks <- forM shared $ \(r, (a, b)) -> do
+                inst_a <- instruction p . normal $ a
+                inst_b <- instruction p . normal $ b
+                return $ L.intercalate "\n"
+                  [ "    " ++ pp p r
+                  , "      " ++ pp p inst_a
+                  , "      " ++ pp p inst_b
+                  ]
+              return . L.intercalate "\n" $
+                "Candidates shares locks:" : locks
+             ) $ locksetFilter' lm c
         "reject" ->
-          const . left . const . return $ "Rejected"
+          const . left . return $ "Rejected"
         "unique" -> \c -> do
           str <- liftIO $ toString c
           alreadyProven <- lift $ gets (S.member str . proven)
           if alreadyProven
-            then left . const . return $ "Already proven"
+            then left . return $ "Already proven"
             else return c
         _ ->
           error $ "Unknown filter " ++ name
 
-    getProver name =
+    getProver lm name =
       case name of
         "said"     -> said
-        "kalhauge" -> kalhauge
+        "kalhauge" -> kalhauge lm
         "free"     -> free
         "none"     -> none
         _          -> error $ "Unknown prover: '" ++ name ++ "'"
@@ -391,7 +420,7 @@ cnf2dot p h cnf = unlines $
      ]
   ++ [ "}" ]
   where
-    pprint = pp p
+    pprint = concatMap (\c -> if c == '"' then "\\\"" else [c]) . pp p
     pr u = "O" ++ show (idx u)
 
     printEvent :: Int -> UE -> String

@@ -6,27 +6,29 @@ module Wiretap.Analysis.Lock
   , locksetFilter
   , locksetFilter'
   , lockset
+  , nonreentrant
+  , LockMap
   , DeadlockEdge(..)
   , Deadlock(..)
   )
 where
 
-import qualified Data.List                as L
-import qualified Data.Map.Strict          as M
-import           Data.Maybe
-import           Data.Unique
-import           Wiretap.Format.Text
-
-import           Wiretap.Analysis.Permute
 import           Wiretap.Data.Event
-import qualified Wiretap.Data.Program as Program
 import           Wiretap.Data.History
+import           Wiretap.Data.Proof
 import           Wiretap.Utils
 
+import qualified Data.List                  as L
+import qualified Data.Map.Strict            as M
+import           Data.Maybe
+import           Data.Unique
+
+import           Control.Lens               (over, _1)
 import           Control.Monad
-import           Control.Lens (over, _1)
 import           Control.Monad.State.Strict
 import           Control.Monad.Trans.Either
+
+type LockMap = UniqueMap (M.Map Ref UE)
 
 -- | Lockset simulation, walks over a history and calculates the lockset
 -- | of each event. The function produces a tuple of an assignment a lockset
@@ -36,7 +38,7 @@ import           Control.Monad.Trans.Either
 locksetSimulation :: PartialHistory h
   => M.Map Thread [(Ref, UE)]
   -> h
-  -> (UniqueMap (M.Map Ref UE), M.Map Thread [(Ref, UE)])
+  -> (LockMap, M.Map Thread [(Ref, UE)])
 locksetSimulation !s history =
   (fromUniques $ map (fmap toLockMap) lockstacks, state')
   where
@@ -70,7 +72,7 @@ locksetSimulation !s history =
     toLockMap =
       M.fromList
 
-sharedLocks :: UniqueMap (M.Map Ref UE) -> UE -> UE -> M.Map Ref (UE, UE)
+sharedLocks :: LockMap -> UE -> UE -> M.Map Ref (UE, UE)
 sharedLocks u a b =
   M.intersectionWith (,) (u ! a) (u ! b)
 
@@ -78,35 +80,25 @@ locksetFilter
   :: (Candidate a, PartialHistory h, Monad m)
   => h
   -> a
-  -> EitherT (Program.Program -> IO String) m a
+  -> EitherT [(Ref, (UE,UE))] m a
 locksetFilter h =
   locksetFilter' $ lockMap h
 
 locksetFilter'
   :: (Candidate a, Monad m)
-  => UniqueMap (M.Map Ref UE)
+  => LockMap
   -> a
-  -> EitherT (Program.Program -> IO String) m a
+  -> EitherT [(Ref, (UE,UE))] m a
 locksetFilter' lm c = do
   let shared = uncurry (sharedLocks lm) $ toEventPair c
   if M.null shared
     then return c
-    else left $ \p -> do
-      locks <- forM (M.assocs shared) $ \(r, (a, b)) -> do
-        inst_a <- instruction p . normal $ a
-        inst_b <- instruction p . normal $ b
-        return $ L.intercalate "\n"
-          [ "    " ++ pp p r
-          , "      " ++ pp p inst_a
-          , "      " ++ pp p inst_b
-          ]
-      return . L.intercalate "\n" $
-        "Candidates shares locks:" : locks
+    else left $ M.assocs shared
 
 lockMap
   :: PartialHistory h
   => h
-  -> UniqueMap (M.Map Ref UE)
+  -> LockMap
 lockMap =
   fst . locksetSimulation M.empty
 
@@ -136,22 +128,36 @@ instance Candidate Deadlock where
   toEventPair dl =
     (dedgeRequest . edgeA $ dl, dedgeRequest . edgeB $ dl)
 
+
+-- A non reentrant lock has does not have it's own lock in
+-- the it's lockset.
+nonreentrant :: LockMap -> UE -> Ref -> Bool
+nonreentrant lm e l =
+  M.notMember l (lm ! e)
+
+
 deadlockCandidates'
   :: PartialHistory h
   => h
-  -> UniqueMap (M.Map Ref UE)
+  -> LockMap
   -> [Deadlock]
 deadlockCandidates' h lm =
   catMaybes $ L.map getDeadlock pairs
   where
-    pairs = combinations $ onRequests (,) h
+    pairs = combinations $
+      L.filter (uncurry $ nonreentrant lm) $ onRequests (,) h
 
     -- Takes two requests and their locks and tries to create
     -- two conflicting edges.
-    getDeadlock ((a, la), (b, lb)) =
-      if (thread . normal $ a) == (thread . normal $ b)
-         then Nothing
-         else liftM2 Deadlock (getEdge la b) (getEdge lb a)
+    getDeadlock ((a, la), (b, lb)) = do
+      -- Can't be the same thread
+      guard $ threadOf a /= threadOf b
+      -- Can't try to get the same lock
+      guard $ lb /= la
+
+      Deadlock <$> getEdge la b <*> getEdge lb a
+
+      where threadOf = thread . normal
 
     -- From a lock an a request figure out if there is a
     -- happens before access from acquire that acquired the
