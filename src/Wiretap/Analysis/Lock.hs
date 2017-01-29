@@ -154,17 +154,16 @@ deadlockCandidates' h lm =
       guard $ threadOf a /= threadOf b
       -- Can't try to get the same lock
       guard $ lb /= la
-
       Deadlock <$> getEdge la b <*> getEdge lb a
 
-      where threadOf = thread . normal
-
-    -- From a lock an a request figure out if there is a
-    -- happens before access from acquire that acquired the
-    -- lock to the request.
+    -- A edge that the request has the lock in it's lock map.
+    -- This means that there exist an event which acquired the
+    -- lock, and haven't released it before the request.
     getEdge l req = do
       acq <- M.lookup l $ lm ! req
       return $ DeadlockEdge l acq req
+
+    threadOf = thread . normal
 
 deadlockCandidates :: PartialHistory h
   => M.Map Thread [(Ref, UE)]
