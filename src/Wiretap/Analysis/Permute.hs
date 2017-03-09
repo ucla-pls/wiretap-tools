@@ -175,6 +175,7 @@ controlFlow h u@(Unique _ e) =
       _ -> s
 
 -- | Get all refs known by the event at the moment of execution.
+-- TODO: Fix problem with write
 knownRefs :: UE -> S.Set Ref
 knownRefs (Unique _ e) =
   case operation e of
@@ -187,6 +188,8 @@ knownRefs (Unique _ e) =
     Release r ->
       S.singleton r
     Request r ->
+      S.singleton r
+    Enter r _ ->
       S.singleton r
     _ ->
       S.empty
@@ -219,11 +222,11 @@ controlFlowDependencies h u =
 controlFlowConsistency
   :: PartialHistory h
   => LockMap
-  -> [UE]
+  -> S.Set UE
   -> h
   -> LIA UE
 controlFlowConsistency lm us h =
-  consistent (S.empty) (S.unions [ cfc u | u <- us ])
+  consistent (S.empty) (S.unions [ cfc u | u <- S.toList us ])
   where
   cfc u = S.fromAscList (controlFlowDependencies h u)
 
@@ -342,28 +345,32 @@ permute prover h a = do
   solution <- solve (enumerate h) cnts
   case solution of
     Just hist ->
-      return $ Proof a cnts (withPair pair hist)
+      return $ Proof a cnts (prefixContaining es hist)
     Nothing ->
       left cnts
   where
-    pair = toEventPair a
-    cnts = prover h pair
+    es = (candidateSet a)
+    cnts = prover h es
 
 said :: Prover
-said h (a, b) =
-  And $ Eq a b :
+said h es =
+  And $ (equate es):
     ([ sc, mhb, lc, rwc ] <*> [h])
 
 kalhauge :: LockMap -> Prover
-kalhauge lm h (a, b) =
-  And $ Eq a b :
-    ([ sc, mhb, controlFlowConsistency lm [a, b]] <*> [h])
+kalhauge lm h es =
+  And $ (equate es):
+    ([ sc, mhb, controlFlowConsistency lm es] <*> [h])
 
 free :: Prover
-free h (a, b) =
-  And $ Eq a b :
+free h es =
+  And $ (equate es) :
     ([ sc, mhb ] <*> [h])
 
-none :: h -> (UE, UE) -> LIA UE
-none _ (a, b) =
-  And [Eq a b]
+none :: h -> CandidateSet -> LIA UE
+none _ es =
+  equate es
+
+equate :: CandidateSet -> LIA UE
+equate es =
+  And . L.map (uncurry Eq) $ combinations (S.toList es)

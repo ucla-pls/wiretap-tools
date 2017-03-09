@@ -173,36 +173,24 @@ runCommand args config = do
 
   onCommand "dataraces" $
     proveCandidates config p
-      (each . raceCandidates) $ dataRaceToString p
+      (each . raceCandidates) $ candidateToString p
 
   onCommand "deadlocks" $
     proveCandidates config p (
       \s -> do
         lm <- lift $ gets lockMap
         each $ deadlockCandidates' s lm
-      ) $ deadlockToString p
+      ) $ candidateToString p
 
   where
     getProgram cfg =
       maybe (return Program.empty) Program.fromFolder $
         program config <|> fmap takeDirectory (history cfg)
 
-    deadlockToString :: Program.Program -> Deadlock -> IO String
-    deadlockToString p (Deadlock a b) = do
-      L.intercalate ";" . L.sort <$> forM [a, b] edgeToString
-      where
-        edgeToString (DeadlockEdge ref' acq rel) = do
-          as <- forM [acq, rel] $ instruction p . normal
-          return . L.intercalate "," $ pp p ref':L.map (pp p) as
-
-
-    dataRaceToString p (DataRace l a b) | humanReadable config =
-      return $ padStr a' ' ' 60 ++ padStr b' ' ' 60 ++ pp p l
-      where [a', b'] = map (pp p) [a, b]
-
-    dataRaceToString p (DataRace _ a b) = do
-      datarace <- mapM (instruction p . normal) [a, b]
-      return $ unwords . L.sort $ map (pp p) datarace
+    candidateToString :: (Candidate a) => Program.Program -> a -> IO String
+    candidateToString p a =
+      L.intercalate ";" . map (pp p) <$>
+        mapM (instruction p . normal) (S.toList $ candidateSet a)
 
     printLockset pprint (e, locks) | humanReadable config =
       putStrLn $ padStr (pprint e) ' ' 60 ++ " - " ++ locks
@@ -346,8 +334,8 @@ proveCandidates config p generator toString events =
       case outputProof config of
         Just folder -> do
           createDirectoryIfMissing True folder
-          let (Unique ia _, Unique ib _) = toEventPair c
-              file = folder </> show ia ++ "-" ++ show ib ++ ".err.dot"
+          let ls = map (show . id) . L.sort . S.toList $ candidateSet c
+              file = folder </> (L.intercalate "-" ls ++ ".err.dot")
           withFile file WriteMode $ \h ->
             hPutStr h $ cnf2dot p hist (toCNF cnts)
           return $ "Could solve constraints, outputted to '" ++ file ++ "'"
@@ -359,8 +347,8 @@ proveCandidates config p generator toString events =
       case outputProof config of
         Just folder -> do
           createDirectoryIfMissing True folder
-          let (Unique ia _, Unique ib _) = toEventPair c
-          withFile (folder </> show ia ++ "-" ++ show ib ++ ".hist") WriteMode $
+          let ls = map (show . id) . L.sort . S.toList $ candidateSet c
+          withFile (folder </> L.intercalate "-" ls ++ ".hist") WriteMode $
             \h -> runEffect $ each hist >-> P.map normal >-> writeHistory h
         Nothing ->
           return ()

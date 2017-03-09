@@ -9,7 +9,10 @@ import           Prelude                  hiding (reads)
 import           Data.Function            (on)
 import qualified Data.List                as L
 import qualified Data.Map                 as M
+import qualified Data.Set                 as S
 import           Data.Unique
+
+import Control.Monad (liftM2)
 
 import           Wiretap.Analysis.Permute
 import           Wiretap.Data.Event
@@ -44,16 +47,16 @@ sharedLocations h =
 
 data DataRace = DataRace
   { location :: Location
-  , eventA        :: UE
-  , eventB        :: UE
+  , eventA   :: UE
+  , eventB   :: UE
   } deriving (Show, Eq)
 
 instance Ord DataRace where
-  compare = compare `on` toEventPair
+  compare = compare `on` (liftM2 (,) eventA eventB)
 
 instance Candidate DataRace where
-  toEventPair (DataRace _ a b) =
-    (a, b)
+  candidateSet (DataRace _ a b) =
+    S.fromList [a, b]
 
 raceCandidates :: PartialHistory h
   => h

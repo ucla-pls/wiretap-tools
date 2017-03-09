@@ -1,12 +1,13 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DeriveFunctor #-}
 module Wiretap.Data.Proof
-  ( Candidate(..), Proof(..), (~/>), (~/~), Prover
+  ( Candidate(..), Proof(..), (~/>), (~/~), Prover, CandidateSet
   ) where
 
 import Data.Unique
 import Wiretap.Data.History
 import Data.PartialOrder
+import Data.Set as S
 import Wiretap.Analysis.LIA
 
 (~/>) :: UE -> UE -> Bool
@@ -17,9 +18,10 @@ import Wiretap.Analysis.LIA
 (~/~) a b =
   a ~/> b && b ~/> a
 
+type CandidateSet = S.Set UE
 
 class Candidate a where
-  toEventPair :: a -> (UE, UE)
+  candidateSet :: a -> CandidateSet
 
 data Proof a = Proof
   { candidate   :: a
@@ -27,4 +29,4 @@ data Proof a = Proof
   , evidence    :: [UE]
   } deriving Functor
 
-type Prover = forall h . PartialHistory h => h -> (UE, UE) -> LIA UE
+type Prover = forall h . PartialHistory h => h -> CandidateSet -> LIA UE

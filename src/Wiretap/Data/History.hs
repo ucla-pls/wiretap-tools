@@ -1,5 +1,5 @@
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase        #-}
 module Wiretap.Data.History where
 
 import           Data.Foldable
@@ -72,6 +72,21 @@ withPair (a, b) h =
   where
     isNotAB e = e /= a && e /= b
 
+prefixContaining
+  :: PartialHistory h
+  => S.Set UE
+  -> h
+  -> [UE]
+prefixContaining es h =
+  go es (enumerate h)
+  where
+    go es' _ | null es' = []
+    go _ [] = []
+    go es' (e: h') =
+      e : if e `S.member` es'
+          then go (e `S.delete` es') h'
+          else go es' h'
+
 byThread :: PartialHistory h
   => h
   -> M.Map Thread [UE]
@@ -80,6 +95,9 @@ byThread =
   where
   step u@(Unique _ e) =
     updateDefault [] (u:) $ thread e
+
+threadOf :: UE -> Thread
+threadOf = thread . normal
 
 onEvent
   :: PartialHistory h
@@ -97,7 +115,7 @@ onReads
   -> [a]
 onReads = onEvent filter'
   where filter' (Read l v) = Just (l, v)
-        filter' _ = Nothing
+        filter' _          = Nothing
 
 onWrites
   :: PartialHistory h
@@ -106,7 +124,7 @@ onWrites
   -> [a]
 onWrites = onEvent filter'
   where filter' (Write l v) = Just (l, v)
-        filter' _ = Nothing
+        filter' _           = Nothing
 
 onAcquires
   :: PartialHistory h
@@ -115,7 +133,7 @@ onAcquires
   -> [a]
 onAcquires = onEvent filter'
   where filter' (Acquire r) = Just r
-        filter' _ = Nothing
+        filter' _           = Nothing
 
 onRequests
   :: PartialHistory h
@@ -124,4 +142,4 @@ onRequests
   -> [a]
 onRequests = onEvent filter'
   where filter' (Request r) = Just r
-        filter' _ = Nothing
+        filter' _           = Nothing
