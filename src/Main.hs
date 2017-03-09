@@ -334,7 +334,7 @@ proveCandidates config p generator toString events =
       case outputProof config of
         Just folder -> do
           createDirectoryIfMissing True folder
-          let ls = map (show . id) . L.sort . S.toList $ candidateSet c
+          let ls = map (show . idx) . L.sort . S.toList $ candidateSet c
               file = folder </> (L.intercalate "-" ls ++ ".err.dot")
           withFile file WriteMode $ \h ->
             hPutStr h $ cnf2dot p hist (toCNF cnts)
@@ -347,7 +347,7 @@ proveCandidates config p generator toString events =
       case outputProof config of
         Just folder -> do
           createDirectoryIfMissing True folder
-          let ls = map (show . id) . L.sort . S.toList $ candidateSet c
+          let ls = map (show . idx) . L.sort . S.toList $ candidateSet c
           withFile (folder </> L.intercalate "-" ls ++ ".hist") WriteMode $
             \h -> runEffect $ each hist >-> P.map normal >-> writeHistory h
         Nothing ->

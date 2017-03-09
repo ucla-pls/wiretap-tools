@@ -32,6 +32,8 @@ import           Control.Monad
 import           Control.Monad.State.Strict
 import           Control.Monad.Trans.Either
 
+
+
 type LockMap = UniqueMap (M.Map Ref UE)
 
 -- | Lockset simulation, walks over a history and calculates the lockset
@@ -127,7 +129,7 @@ data DeadlockEdge = DeadlockEdge
 edge :: LockMap -> UE -> (UE, Ref) -> Maybe DeadlockEdge
 edge lockmap e (req, l) = do
   guard $ threadOf e /= threadOf req
-  acq <- M.lookup l $ lockmap ! req
+  acq <- M.lookup l $ lockmap ! e
   return $ DeadlockEdge e l acq req
 
 edge' :: LockMap -> (UE, Ref) -> (UE, Ref) -> Maybe DeadlockEdge
@@ -149,7 +151,8 @@ nonreentrant :: LockMap -> UE -> Ref -> Bool
 nonreentrant lm e l =
   M.notMember l (lm ! e)
 
-myscc :: forall node. Ord node => [(node, node)] -> [[node]]
+
+myscc :: forall node. (Ord node, Show node) => [(node, node)] -> [[node]]
 myscc edges =
   L.concatMap (\case G.CyclicSCC ls -> [ls]; _ -> []) $
      G.stronglyConnComp gEdges
@@ -168,7 +171,7 @@ deadlockCandidates' h lockmap =
       L.filter (uncurry $ nonreentrant lockmap) $ onRequests (,) h
 
     edges =
-      catMaybes $ map (uncurry $ edge' lockmap) $ combinations requests
+      catMaybes $ map (uncurry $ edge' lockmap) $ crossproduct requests requests
 
 
 deadlockCandidates :: PartialHistory h
