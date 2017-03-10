@@ -10,7 +10,6 @@ module Wiretap.Analysis.Lock
   , lockset
   , nonreentrant
   , LockMap
-  , DeadlockEdge(..)
   , Deadlock(..)
   )
 where
@@ -19,19 +18,21 @@ import           Wiretap.Data.Event
 import           Wiretap.Data.History
 import           Wiretap.Data.Proof
 import           Wiretap.Utils
+import           Wiretap.Graph
 
 import qualified Data.List                  as L
 import qualified Data.Map.Strict            as M
 import           Data.Maybe
 import           Data.Unique
-import qualified Data.Graph   as G
 import qualified Data.Set   as S
+
 
 import           Control.Lens               (over, _1)
 import           Control.Monad
 import           Control.Monad.State.Strict
 import           Control.Monad.Trans.Either
 
+import           Debug.Trace
 
 
 type LockMap = UniqueMap (M.Map Ref UE)
@@ -117,47 +118,44 @@ lockset h =
   map (\e -> (normal e, locks ! e)) $ enumerate h
   where locks = lockMap h
 
--- | A deadlock edge is proof that there is exist an happen-before edge from the
--- | acquirement of a lock to a request for another lock.
-data DeadlockEdge = DeadlockEdge
-  { edgeFrom    :: UE
-  , edgeLock    :: Ref
-  , edgeAcquire :: UE
-  , edgeTo      :: UE
-  } deriving (Show, Ord, Eq)
-
-edge :: LockMap -> UE -> (UE, Ref) -> Maybe DeadlockEdge
-edge lockmap e (req, l) = do
-  guard $ threadOf e /= threadOf req
-  acq <- M.lookup l $ lockmap ! e
-  return $ DeadlockEdge e l acq req
-
-edge' :: LockMap -> (UE, Ref) -> (UE, Ref) -> Maybe DeadlockEdge
-edge' lockmap (req', _) b =
-  edge lockmap req' b
-
--- | A deadlock is a list of deadlock edges such that. The edge To of
--- | i is the edge from of (i + 1 % n).
-data Deadlock = Deadlock
-  { deadlockCycle :: [UE]
-  } deriving (Show, Ord, Eq)
-
-instance Candidate Deadlock where
-  candidateSet = S.fromList . deadlockCycle
-
 -- A non reentrant lock has does not have it's own lock in
 -- the its own lockset.
 nonreentrant :: LockMap -> UE -> Ref -> Bool
 nonreentrant lm e l =
   M.notMember l (lm ! e)
 
+data LockEdgeLabel = LockEdgeLabel
+  { edgeLock :: Ref
+  , edgeAcquire :: UE
+  } deriving (Show, Ord, Eq)
 
-myscc :: forall node. (Ord node, Show node) => [(node, node)] -> [[node]]
-myscc edges =
-  L.concatMap (\case G.CyclicSCC ls -> [ls]; _ -> []) $
-     G.stronglyConnComp gEdges
-  where
-    gEdges = L.map (\(a, es) -> (a, a, es)) $ groupUnsortedOnFst edges
+data DeadlockEdge = DeadlockEdge
+  { edgeFrom :: UE
+  , edgeLabel :: LockEdgeLabel
+  , edgeTo :: UE
+  } deriving (Show, Ord, Eq)
+
+-- | A deadlock is a list of deadlock edges such that. The edge To of
+-- | i is the edge from of (i + 1 % n).
+data Deadlock = Deadlock
+  { deadlockCycle :: S.Set DeadlockEdge
+  } deriving (Show, Ord, Eq)
+
+instance Candidate Deadlock where
+  candidateSet =
+    S.map edgeFrom . deadlockCycle
+
+edge :: LockMap -> UE -> (UE, Ref) -> Maybe LockEdgeLabel
+edge lockmap e (req, l) = do
+  guard $ threadOf e /= threadOf req
+  acq <- M.lookup l $ lockmap ! e
+  return $ LockEdgeLabel l acq
+
+edge' :: LockMap -> (UE, Ref) -> (UE, Ref) -> Maybe LockEdgeLabel
+edge' lockmap a@(req', l) b = do
+  guard $ l /= snd b;
+  edge lockmap req' b
+
 
 deadlockCandidates'
   :: PartialHistory h
@@ -165,13 +163,16 @@ deadlockCandidates'
   -> LockMap
   -> [Deadlock]
 deadlockCandidates' h lockmap =
-  map Deadlock . myscc $ map (\e -> (edgeFrom e, edgeTo e)) edges
+  fromCycle <$> cycles requests (edge' lockmap)
   where
     requests =
       L.filter (uncurry $ nonreentrant lockmap) $ onRequests (,) h
 
-    edges =
-      catMaybes $ map (uncurry $ edge' lockmap) $ crossproduct requests requests
+    fromCycle =
+      Deadlock . S.map toDeadlockEdge
+
+    toDeadlockEdge ((n,_), l, (n', _)) =
+      DeadlockEdge n l n'
 
 
 deadlockCandidates :: PartialHistory h

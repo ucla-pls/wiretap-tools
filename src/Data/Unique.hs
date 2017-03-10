@@ -38,7 +38,11 @@ fromUniques lst =
 
 (!) :: UniqueMap a -> Unique b -> a
 m ! u =
-  case M.lookup (idx u) $ toIntMap m of
+  case m !? idx u of
     Just a -> a
     Nothing ->
       error $ "Could not find " ++ (show $ idx u) ++ " in UniqueMap."
+
+(!?) :: UniqueMap a -> Int -> Maybe a
+m !? u =
+  M.lookup u $ toIntMap m

@@ -188,9 +188,14 @@ runCommand args config = do
         program config <|> fmap takeDirectory (history cfg)
 
     candidateToString :: (Candidate a) => Program.Program -> a -> IO String
+    candidateToString p a | humanReadable config =
+      return $
+         L.intercalate "\n" . L.sort . map (pp p . normal) $
+                            (S.toList $ candidateSet a)
     candidateToString p a =
-      L.intercalate ";" . map (pp p) <$>
+      L.intercalate " " . L.sort . map (pp p) <$>
         mapM (instruction p . normal) (S.toList $ candidateSet a)
+
 
     printLockset pprint (e, locks) | humanReadable config =
       putStrLn $ padStr (pprint e) ' ' 60 ++ " - " ++ locks

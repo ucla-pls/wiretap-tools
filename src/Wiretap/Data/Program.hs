@@ -65,7 +65,7 @@ findInstruction p tid oid =
   case _instructionFolder p of
     Just folder -> do
       bs <- BL.readFile (folder </> show tid)
-      return . decode $ BL.drop (fromIntegral oid * 4) bs
+      return $! (decode $ BL.drop (fromIntegral oid * 4) bs)
     Nothing -> do
       return nullInst
 
