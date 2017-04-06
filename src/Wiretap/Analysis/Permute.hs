@@ -273,7 +273,7 @@ controlFlowConsistency lm us h =
         Just r ->
           And $
           [ Or
-            [ r' ~> a
+            [ And [ r' ~> a, consistent visited' (cfc r') ]
               -- ^ Either the other pair has to come before the the current pair
             , r ~> a'
               -- ^ Or it happened afterwards
