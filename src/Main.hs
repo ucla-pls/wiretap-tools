@@ -90,12 +90,13 @@ Filters are applicable to dataraces and deadlock analyses.
 Provers:
 A prover is an algorithm turns a history into a constraint.
 
-  said:      The prover used in [Said 2011].
-  free:      A prover that only uses must-happen-before constraints, and sequential
-             consistency.
   none:      No constraints except that the candidate has to be placed next to
              each other.
-  kalhauge:  The data flow sentisive control-flow consistency alogrithm [default].
+  free:      A prover that only uses must-happen-before constraints, and sequential
+             consistency.
+  said:      The prover used in Said et. al. 2011.
+  rvpredict: A prover based on Huang et. al. 2014.
+  dirk:      The data flow sentisive control-flow consistency alogrithm [default].
 |]
 
 data Config = Config
@@ -133,7 +134,7 @@ readConfig args = do
     { verbose = isPresent args $ longOption "verbose"
     , filters = splitOn ','
         $ getArgWithDefault args "unique,lockset" (longOption "filter")
-    , prover = getArgWithDefault args "kalhauge" (longOption "prover")
+    , prover = getArgWithDefault args "dirk" (longOption "prover")
     , outputProof = getLongOption "proof"
     , program = getLongOption "program"
     , history = getArgument "history"
@@ -387,10 +388,11 @@ proveCandidates config p generator toString events =
 
     getProver lm name =
       case name of
-        "said"     -> said
-        "kalhauge" -> kalhauge lm
-        "free"     -> free
-        "none"     -> none
+        "said"      -> said
+        "dirk"      -> dirk lm
+        "rvpredict" -> rvpredict lm
+        "free"      -> free
+        "none"      -> none
         _          -> error $ "Unknown prover: '" ++ name ++ "'"
 
 runAll :: (Monad m') => a -> [a -> m' a] -> m' a

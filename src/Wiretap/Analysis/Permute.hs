@@ -3,7 +3,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TemplateHaskell  #-}
 module Wiretap.Analysis.Permute
-  ( kalhauge
+  ( drik
+  , rvpredict
   , said
   , free
   , none
@@ -196,39 +197,63 @@ knownRefs (Unique _ e) =
 
 -- | For a given event, choose all the reads, and locks, that needs to be
 -- | consistent for this event to also be consistent.
-controlFlowDependencies
+cfdDrik
   :: PartialHistory h
   => h
   -> UE
   -> [UE]
-controlFlowDependencies h u =
+cfdDirk h u =
  simulateReverse step ([], knownRefs u, False) (controlFlow h u)  ^. _1
   where
     step u'@(Unique _ e') s@(events, refs, branch) =
       case operation e' of
         Read _ _ | branch ->
-          over _1 (u':) s
+          (u':events, refs, branch)
         Read _ (Object v) | Ref v `S.member` refs  ->
-          over _1 (u':) s
+          (u':events, knownRefs e' `S.union` refs, branch)
         Acquire r ->
           (u':events, r `S.insert` refs, branch)
         Branch ->
-          set _3 True s
+          (events, refs, True)
         Enter r _ | pointer r /= 0 ->
-          over _2 (S.insert r) s
+          (events, r `S.insert` refs, branch)
+        _ ->
+          s
+
+-- | For a given event, choose all the reads, and locks, that needs to be
+-- | consistent for this event to also be consistent.
+cfdRVPredict
+  :: PartialHistory h
+  => h
+  -> UE
+  -> [UE]
+cfdRVPredict h u =
+ simulateReverse step ([], False) (controlFlow h u)  ^. _1
+  where
+    step u'@(Unique _ e') s@(events, branch) =
+      case operation e' of
+        Read _ _ | branch ->
+          (u':events, branch)
+        Acquire r ->
+          (u':events, True)
+        Branch ->
+          (events, True)
+        Enter r _ | pointer r /= 0 ->
+          (events, True)
         _ ->
           s
 
 controlFlowConsistency
   :: PartialHistory h
   => LockMap
+  -> (h -> UE -> [UE])
   -> S.Set UE
   -> h
   -> LIA UE
-controlFlowConsistency lm us h =
+controlFlowConsistency lm cfd us h =
   consistent (S.empty) (S.unions [ cfc u | u <- S.toList us ])
   where
-  cfc u = S.fromAscList (controlFlowDependencies h u)
+  cfc u = S.fromAscList (cfd h u)
 
   consistent visited deps =
     And [ And $ onReads readConsitency depends
@@ -357,10 +382,15 @@ said h es =
   And $ (equate es):
     ([ sc, mhb, lc, rwc ] <*> [h])
 
-kalhauge :: LockMap -> Prover
-kalhauge lm h es =
+dirk :: LockMap -> Prover
+dirk lm h es =
   And $ (equate es):
-    ([ sc, mhb, controlFlowConsistency lm es] <*> [h])
+    ([ sc, mhb, controlFlowConsistency lm cfdDirk es] <*> [h])
+
+rvpredict :: LockMap -> Prover
+rvpredict lm h es =
+  And $ (equate es):
+    ([ sc, mhb, controlFlowConsistency lm cfdRVPredict es] <*> [h])
 
 free :: Prover
 free h es =
