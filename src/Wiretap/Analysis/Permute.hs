@@ -3,7 +3,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TemplateHaskell  #-}
 module Wiretap.Analysis.Permute
-  ( drik
+  ( dirk
   , rvpredict
   , said
   , free
@@ -177,83 +177,130 @@ controlFlow h u@(Unique _ e) =
 
 -- | Get all refs known by the event at the moment of execution.
 -- TODO: Fix problem with write
-knownRefs :: UE -> S.Set Ref
-knownRefs (Unique _ e) =
+valuesOf :: UE -> (S.Set Ref, Bool)
+valuesOf (Unique _ e) =
   case operation e of
-    Write l (Object v) ->
-      maybe S.empty S.singleton (ref l) `S.union` S.singleton (Ref v)
+    Write l _ ->
+      valueL l
     Read l _ ->
-      maybe S.empty S.singleton (ref l)
+      valueL l
     Acquire r ->
-      S.singleton r
+      (S.singleton r, False)
     Release r ->
-      S.singleton r
+      (S.singleton r, False)
     Request r ->
-      S.singleton r
-    Enter r _ ->
-      S.singleton r
+      (S.singleton r, False)
+    Branch ->
+      (S.empty, True)
+    Enter r _ | pointer r  /= 0->
+      (S.singleton r, False)
     _ ->
-      S.empty
+      (S.empty, False)
+  where
+    valueL :: Location -> (S.Set Ref, Bool)
+    valueL l =
+      case l of
+        Dynamic r _ -> (S.singleton r, False)
+        Array r _ -> (S.singleton r, True)
+        _ -> (S.empty, False)
+
+cfdFree
+  :: PartialHistory h
+  => h
+  -> (S.Set Ref, Bool)
+  -> UE
+  -> [UE]
+cfdFree h v u =
+  simulateReverse step [] (controlFlow h u)
+  where
+    step u'@(Unique _ e') events =
+      case operation e' of
+        Acquire r ->
+          u':events
+        _ ->
+          events
+
+cfdSaid
+  :: PartialHistory h
+  => h
+  -> (S.Set Ref, Bool)
+  -> UE
+  -> [UE]
+cfdSaid h v u =
+  simulateReverse step [] (controlFlow h u)
+  where
+    step u'@(Unique _ e') events =
+      case operation e' of
+        Read _ _ ->
+          u':events
+        Acquire r ->
+          u':events
+        _ ->
+          events
 
 -- | For a given event, choose all the reads, and locks, that needs to be
 -- | consistent for this event to also be consistent.
-cfdDrik
+cfdDirk
   :: PartialHistory h
   => h
+  -> (S.Set Ref, Bool)
   -> UE
   -> [UE]
-cfdDirk h u =
- simulateReverse step ([], knownRefs u, False) (controlFlow h u)  ^. _1
+cfdDirk h v u =
+  simulateReverse step ([], valuesOf u `join` v) (controlFlow h u)  ^. _1
   where
-    step u'@(Unique _ e') s@(events, refs, branch) =
-      case operation e' of
-        Read _ _ | branch ->
-          (u':events, refs, branch)
-        Read _ (Object v) | Ref v `S.member` refs  ->
-          (u':events, knownRefs e' `S.union` refs, branch)
-        Acquire r ->
-          (u':events, r `S.insert` refs, branch)
-        Branch ->
-          (events, refs, True)
-        Enter r _ | pointer r /= 0 ->
-          (events, r `S.insert` refs, branch)
-        _ ->
-          s
+    step u'@(Unique _ e') s@(events, vs@(refs, branch)) =
+      let events' =
+            case operation e' of
+              Read _ _ | branch ->
+                u':events
+              Read _ (Object v) | Ref v `S.member` refs  ->
+                u':events
+              Acquire r ->
+                u':events
+              _ ->
+                events
+      in (events', valuesOf u' `join` vs)
+
+    join (r, b) (r2, b2) =
+      (r `S.union` r2, b || b2)
 
 -- | For a given event, choose all the reads, and locks, that needs to be
 -- | consistent for this event to also be consistent.
 cfdRVPredict
   :: PartialHistory h
   => h
+  -> (S.Set Ref, Bool)
   -> UE
   -> [UE]
-cfdRVPredict h u =
- simulateReverse step ([], False) (controlFlow h u)  ^. _1
+cfdRVPredict h v u =
+  simulateReverse step ([], (valuesOf u `join` (v `join` False))) (controlFlow h u)  ^. _1
   where
     step u'@(Unique _ e') s@(events, branch) =
-      case operation e' of
-        Read _ _ | branch ->
-          (u':events, branch)
-        Acquire r ->
-          (u':events, True)
-        Branch ->
-          (events, True)
-        Enter r _ | pointer r /= 0 ->
-          (events, True)
-        _ ->
-          s
+      let events' =
+            case operation e' of
+                Read _ _ | branch ->
+                  u':events
+                Acquire r ->
+                  u':events
+                _ ->
+                  events
+      in (events', valuesOf u' `join` branch)
+
+    join (r, b) b2 =
+      (not (S.null r)) || b || b2
 
 controlFlowConsistency
   :: PartialHistory h
   => LockMap
-  -> (h -> UE -> [UE])
+  -> (h -> (S.Set Ref, Bool) -> UE -> [UE])
   -> S.Set UE
   -> h
   -> LIA UE
 controlFlowConsistency lm cfd us h =
-  consistent (S.empty) (S.unions [ cfc u | u <- S.toList us ])
+  consistent (S.empty) (S.unions [ cfc (S.empty, False) u | u <- S.toList us ])
   where
-  cfc u = S.fromAscList (cfd h u)
+  cfc v u = S.fromAscList (cfd h v u)
 
   consistent visited deps =
     And [ And $ onReads readConsitency depends
@@ -283,13 +330,17 @@ controlFlowConsistency lm cfd us h =
               And [ r ~> w' | (_, w') <- rwrites ]
             rvwrites ->
               Or
-              [ And $ consistent visited' (cfc w) : w ~> r :
+              [ And $ consistent visited' (cfc (val v) w) : w ~> r :
                 [ Or [ w' ~> w, r ~> w']
                 | (_, w') <- rwrites
                 , w' /= w , w' ~/> w, r ~/> w'
                 ]
               | w <- rvwrites
               ]
+    val v =
+      case v of
+        Object r -> (S.singleton (Ref r), False)
+        _ -> (S.empty, True)
 
     lockConsitency a ref' =
       -- Any acquire we test is already controlFlowConsistent, covered by the
@@ -298,7 +349,7 @@ controlFlowConsistency lm cfd us h =
         Just r ->
           And $
           [ Or
-            [ And [ r' ~> a, consistent visited' (cfc r') ]
+            [ And [ r' ~> a, consistent visited' (cfc (S.empty, False) r') ]
               -- ^ Either the other pair has to come before the the current pair
             , r ~> a'
               -- ^ Or it happened afterwards
@@ -377,10 +428,10 @@ permute prover h a = do
     es = (candidateSet a)
     cnts = prover h es
 
-said :: Prover
-said h es =
+said :: LockMap -> Prover
+said lm h es =
   And $ (equate es):
-    ([ sc, mhb, lc, rwc ] <*> [h])
+    ([ sc, mhb, controlFlowConsistency lm cfdSaid es] <*> [h])
 
 dirk :: LockMap -> Prover
 dirk lm h es =
@@ -392,10 +443,10 @@ rvpredict lm h es =
   And $ (equate es):
     ([ sc, mhb, controlFlowConsistency lm cfdRVPredict es] <*> [h])
 
-free :: Prover
-free h es =
+free :: LockMap -> Prover
+free lm h es =
   And $ (equate es) :
-    ([ sc, mhb ] <*> [h])
+    ([ sc, mhb, controlFlowConsistency lm cfdFree es] <*> [h])
 
 none :: h -> CandidateSet -> LIA UE
 none _ es =

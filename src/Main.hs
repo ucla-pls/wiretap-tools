@@ -388,10 +388,10 @@ proveCandidates config p generator toString events =
 
     getProver lm name =
       case name of
-        "said"      -> said
+        "said"      -> said lm
         "dirk"      -> dirk lm
         "rvpredict" -> rvpredict lm
-        "free"      -> free
+        "free"      -> free lm
         "none"      -> none
         _          -> error $ "Unknown prover: '" ++ name ++ "'"
 
