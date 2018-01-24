@@ -11,6 +11,9 @@ module Wiretap.Analysis.Lock
   , nonreentrant
   , LockMap
   , Deadlock(..)
+
+  , LockEdgeLabel (..)
+  , DeadlockEdge (..)
   )
 where
 
@@ -32,7 +35,7 @@ import           Control.Monad
 import           Control.Monad.State.Strict
 import           Control.Monad.Trans.Either
 
-import           Debug.Trace
+-- import           Debug.Trace
 
 
 type LockMap = UniqueMap (M.Map Ref UE)
@@ -152,7 +155,7 @@ edge lockmap e (req, l) = do
   return $ LockEdgeLabel l acq
 
 edge' :: LockMap -> (UE, Ref) -> (UE, Ref) -> Maybe LockEdgeLabel
-edge' lockmap a@(req', l) b = do
+edge' lockmap (req', l) b = do
   guard $ l /= snd b;
   edge lockmap req' b
 

@@ -80,77 +80,77 @@ TODO: Re-entreant locks.
 TODO: RWC for the lock.
 TODO: Remainders, what do we use them for.
 -}
-lc :: PartialHistory h => h -> LIA UE
-lc h =
-  And
-  [ And
-    [ And
-      [ Or [ r ~> a',  r' ~> a ]
-      | ((a, r), (a', r')) <-
-          combinations lockPairs
-      , a ~/> r', r' ~/> a
-      ]
-    , And
-      [ r ~> a
-      | ((_, r), a) <-
-          crossproduct lockPairs (def [] $ M.lookup l remainders)
-      , r ~/> a
-      ]
-    ]
-  | (l, lockPairs) <- lockPairsSet
-  ]
-  where
-    (allLocks, allRemainder) =
-      unpair . M.elems $ simulate step M.empty h
+-- lc :: PartialHistory h => h -> LIA UE
+-- lc h =
+--   And
+--   [ And
+--     [ And
+--       [ Or [ r ~> a',  r' ~> a ]
+--       | ((a, r), (a', r')) <-
+--           combinations lockPairs
+--       , a ~/> r', r' ~/> a
+--       ]
+--     , And
+--       [ r ~> a
+--       | ((_, r), a) <-
+--           crossproduct lockPairs (def [] $ M.lookup l remainders)
+--       , r ~/> a
+--       ]
+--     ]
+--   | (l, lockPairs) <- lockPairsSet
+--   ]
+--   where
+--     (allLocks, allRemainder) =
+--       unpair . M.elems $ simulate step M.empty h
 
-    lockPairsSet =
-      groupUnsortedOnFst $ concat allLocks
+--     lockPairsSet =
+--       groupUnsortedOnFst $ concat allLocks
 
-    remainders =
-      mapOnFst $ concat allRemainder
+--     remainders =
+--       mapOnFst $ concat allRemainder
 
-    step u@(Unique _ e) =
-      case operation e of
-        Acquire l -> update (acqf l) (thread e)
-        Release _ -> update relf (thread e)
-        _         -> id
-      where
-        acqf l (pairs, stack) =
-          (pairs, (l,u):stack)
-        relf (pairs, stack) =
-          case stack of
-            (l, acq):stack' -> ((l, (acq, u)):pairs, stack')
-            [] -> error "Can't release a lock that has not been acquired"
+--     step u@(Unique _ e) =
+--       case operation e of
+--         Acquire l -> update (acqf l) (thread e)
+--         Release _ -> update relf (thread e)
+--         _         -> id
+--       where
+--         acqf l (pairs, stack) =
+--           (pairs, (l,u):stack)
+--         relf (pairs, stack) =
+--           case stack of
+--             (l, acq):stack' -> ((l, (acq, u)):pairs, stack')
+--             [] -> error "Can't release a lock that has not been acquired"
 
-    update = updateDefault ([], [])
+--     update = updateDefault ([], [])
 
-rwc :: PartialHistory h => h -> LIA UE
-rwc h =
-  And
-  [ Or
-    [ And $
-      [ Or [ w' ~> w, r ~> w']
-      | (_, w') <- writes
-      , w' /= w , w' ~/> w, r ~/> w'
-      ]
-      ++ if w ~/> r then [w ~> r] else []
-    | (v', w) <- writes
-    , v' == v
-    , r ~/> w
-    ]
-  | (reads, writes) <- readAndWritesBylocation
-  , (v, r) <- reads
-  , not . L.null $ (filter ((v ==) . fst )) writes
-  ]
-  where
-    readAndWritesBylocation =
-      M.elems $ simulate step M.empty h
-    step u@(Unique _ e) =
-      case operation e of
-        Read l v  -> update (v, u) _1 l
-        Write l v -> update (v, u) _2 l
-        _         -> id
-    update u f = updateDefault ([], []) (over f (u:))
+-- rwc :: PartialHistory h => h -> LIA UE
+-- rwc h =
+--   And
+--   [ Or
+--     [ And $
+--       [ Or [ w' ~> w, r ~> w']
+--       | (_, w') <- writes
+--       , w' /= w , w' ~/> w, r ~/> w'
+--       ]
+--       ++ if w ~/> r then [w ~> r] else []
+--     | (v', w) <- writes
+--     , v' == v
+--     , r ~/> w
+--     ]
+--   | (reads, writes) <- readAndWritesBylocation
+--   , (v, r) <- reads
+--   , not . L.null $ (filter ((v ==) . fst )) writes
+--   ]
+--   where
+--     readAndWritesBylocation =
+--       M.elems $ simulate step M.empty h
+--     step u@(Unique _ e) =
+--       case operation e of
+--         Read l v  -> update (v, u) _1 l
+--         Write l v -> update (v, u) _2 l
+--         _         -> id
+--     update u f = updateDefault ([], []) (over f (u:))
 
 -- | Returns the control flow to a single event, this flow jumps threads, with
 -- | the Join and Fork events.
@@ -210,12 +210,12 @@ cfdFree
   -> (S.Set Ref, Bool)
   -> UE
   -> [UE]
-cfdFree h v u =
+cfdFree h _ u =
   simulateReverse step [] (controlFlow h u)
   where
     step u'@(Unique _ e') events =
       case operation e' of
-        Acquire r ->
+        Acquire _ ->
           u':events
         _ ->
           events
@@ -226,14 +226,14 @@ cfdSaid
   -> (S.Set Ref, Bool)
   -> UE
   -> [UE]
-cfdSaid h v u =
+cfdSaid h _ u =
   simulateReverse step [] (controlFlow h u)
   where
     step u'@(Unique _ e') events =
       case operation e' of
         Read _ _ ->
           u':events
-        Acquire r ->
+        Acquire _ ->
           u':events
         _ ->
           events
@@ -247,22 +247,22 @@ cfdDirk
   -> UE
   -> [UE]
 cfdDirk h v u =
-  simulateReverse step ([], valuesOf u `join` v) (controlFlow h u)  ^. _1
+  simulateReverse step ([], valuesOf u `joinV` v) (controlFlow h u)  ^. _1
   where
-    step u'@(Unique _ e') s@(events, vs@(refs, branch)) =
+    step u'@(Unique _ e') (events, vs@(refs, branch)) =
       let events' =
             case operation e' of
               Read _ _ | branch ->
                 u':events
-              Read _ (Object v) | Ref v `S.member` refs  ->
+              Read _ (Object v') | Ref v' `S.member` refs  ->
                 u':events
-              Acquire r ->
+              Acquire _ ->
                 u':events
               _ ->
                 events
-      in (events', valuesOf u' `join` vs)
+      in (events', valuesOf u' `joinV` vs)
 
-    join (r, b) (r2, b2) =
+    joinV (r, b) (r2, b2) =
       (r `S.union` r2, b || b2)
 
 -- | For a given event, choose all the reads, and locks, that needs to be
@@ -274,20 +274,20 @@ cfdRVPredict
   -> UE
   -> [UE]
 cfdRVPredict h v u =
-  simulateReverse step ([], (valuesOf u `join` (v `join` False))) (controlFlow h u)  ^. _1
+  simulateReverse step ([], (valuesOf u `joinV` (v `joinV` False))) (controlFlow h u)  ^. _1
   where
-    step u'@(Unique _ e') s@(events, branch) =
+    step u'@(Unique _ e') (events, branch) =
       let events' =
             case operation e' of
                 Read _ _ | branch ->
                   u':events
-                Acquire r ->
+                Acquire _ ->
                   u':events
                 _ ->
                   events
-      in (events', valuesOf u' `join` branch)
+      in (events', valuesOf u' `joinV` branch)
 
-    join (r, b) b2 =
+    joinV (r, b) b2 =
       (not (S.null r)) || b || b2
 
 controlFlowConsistency
@@ -298,11 +298,13 @@ controlFlowConsistency
   -> h
   -> LIA UE
 controlFlowConsistency lm cfd us h =
-  consistent (S.empty) (S.unions [ cfc (S.empty, False) u | u <- S.toList us ])
+  consistent (S.empty) (S.toList us) (S.unions [ cfc (S.empty, False) u | u <- S.toList us ])
   where
-  cfc v u = S.fromAscList (cfd h v u)
 
-  consistent visited deps =
+  cfc v u =
+    S.fromAscList (cfd h v u)
+
+  consistent visited path deps =
     And [ And $ onReads readConsitency depends
         , And $ onNonReentrantAcquires lockConsitency depends
         ]
@@ -311,7 +313,7 @@ controlFlowConsistency lm cfd us h =
       deps S.\\ visited
 
     visited' =
-      visited `S.union` depends
+      visited `S.union` deps
 
     readConsitency r (l, v) =
       -- Make sure that location has any writes
@@ -330,13 +332,15 @@ controlFlowConsistency lm cfd us h =
               And [ r ~> w' | (_, w') <- rwrites ]
             rvwrites ->
               Or
-              [ And $ consistent visited' (cfc (val v) w) : w ~> r :
+              [ And $ consistent visited' (r:path) (cfc (val v) w) : w ~> r :
                 [ Or [ w' ~> w, r ~> w']
                 | (_, w') <- rwrites
                 , w' /= w , w' ~/> w, r ~/> w'
                 ]
               | w <- rvwrites
+              , not $ any (w ~/>) (r:path)
               ]
+
     val v =
       case v of
         Object r -> (S.singleton (Ref r), False)
@@ -345,31 +349,46 @@ controlFlowConsistency lm cfd us h =
     lockConsitency a ref' =
       -- Any acquire we test is already controlFlowConsistent, covered by the
       -- dependencies in the controlFlowConsistencies.
-      case M.lookup a releaseFromAcquire of
-        Just r ->
-          And $
-          [ Or
-            [ And [ r' ~> a, consistent visited' (cfc (S.empty, False) r') ]
-              -- ^ Either the other pair has to come before the the current pair
-            , r ~> a'
-              -- ^ Or it happened afterwards
-            ]
-          | (a', r') <- pairs
-          , a' `S.member` visited'
-          , a' /= a, a' ~/> a, a' ~/> a
-          ] ++ map (~> a) dr
-            -- ^ This might be superfluous.
-            ++ map (r ~>) da
-            -- ^ If we do not have an release, make sure that we are ordered after all
-            -- other locks.
-        Nothing ->
-          And
-          [ r' ~> a
-          | (a', r') <- pairs, r' ~/> a
-          , a' `S.member` visited'
-          ]
+      And $
+      [ Or $ [ a ~> a' ]
+        ++ if not $ any (r' ~/>) (a:path)
+           then [ And [ r' ~> a
+                      , consistent visited' (a:path) (cfc (S.empty, False) r')
+                      ]
+                ]
+           else []
+      | (a', r') <- pairs
+      , a' /= a, a' ~/> a, a' ~/> a
+      ] ++
+      [ a ~> a'
+      | a' <- da
+      , a' /= a, a' ~/> a, a' ~/> a
+      ]
+      -- case M.lookup a releaseFromAcquire of
+      --   Just r ->
+      --     And $
+      --     [ Or
+      --       [ And [ r' ~> a, consistent visited' (cfc (S.empty, False) r') ]
+      --         -- ^ Either the other pair has to come before the the current pair
+      --       , r ~> a'
+      --         -- ^ Or it happened afterwards
+      --       ]
+      --     | (a', r') <- pairs
+      --     , a' `S.member` visited'
+      --     , a' /= a, a' ~/> a, a' ~/> a
+      --     ] ++ map (~> a) dr
+      --       -- ^ This might be superfluous.
+      --       ++ map (r ~>) da
+      --       -- ^ If we do not have an release, make sure that we are ordered after all
+      --       -- other locks.
+      --   Nothing ->
+      --     And
+      --     [ r' ~> a, consistent visited' (cfc (S.empty, False) r')
+      --     | (a', r') <- pairs, r' ~/> a
+      --     , a' `S.member` visited'
+      --     ]
       where
-        (dr, pairs, da) = case M.lookup ref' lockPairsWithRef of
+        (_, pairs, da) = case M.lookup ref' lockPairsWithRef of
           Just pairs' -> pairs'
           Nothing ->
             error $ "The ref " ++ show ref'
@@ -390,9 +409,9 @@ controlFlowConsistency lm cfd us h =
       filter' (Release l) = Just l
       filter' _           = Nothing
 
-  releaseFromAcquire :: M.Map UE UE
-  releaseFromAcquire =
-    M.fromList . concatMap (^. _2) $ M.elems lockPairsWithRef
+  -- releaseFromAcquire :: M.Map UE UE
+  -- releaseFromAcquire =
+  --   M.fromList . concatMap (^. _2) $ M.elems lockPairsWithRef
 
   lockPairsWithRef :: M.Map Ref ([UE], [(UE, UE)], [UE])
   lockPairsWithRef =
