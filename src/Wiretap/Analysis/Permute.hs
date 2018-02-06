@@ -10,6 +10,10 @@ module Wiretap.Analysis.Permute
   , none
   , permute
 
+  , refsOnly
+  , branchOnly
+  , valuesOnly
+
   , Candidate(..)
   , Proof(..)
 
@@ -28,10 +32,12 @@ import qualified Data.List              as L
 import qualified Data.Map               as M
 import qualified Data.Set               as S
 import           Data.Unique
+
 import           Data.Maybe (catMaybes)
 import           Control.Monad
 
 import           Wiretap.Analysis.LIA
+import           Data.PartialOrder
 
 import           Wiretap.Data.Event
 import           Wiretap.Data.Proof
@@ -40,6 +46,8 @@ import           Wiretap.Data.History
 import           Wiretap.Analysis.Lock
 
 import           Wiretap.Utils
+
+-- import           Debug.Trace
 
 sc :: PartialHistory h => h -> LIA UE
 sc h =
@@ -175,39 +183,67 @@ controlFlow h u@(Unique _ e) =
         (threads, u':events)
       _ -> s
 
+data ValueSet = ValueSet
+  { vsRefs :: S.Set Ref
+  , vsValues :: Bool
+  , vsBranch :: Bool
+  } deriving (Eq, Show)
+
+instance Monoid ValueSet where
+  mempty = ValueSet S.empty False False
+  mappend x y =
+    ValueSet
+      (vsRefs x `S.union` vsRefs y)
+      (vsValues x || vsValues y)
+      (vsBranch x || vsBranch y)
+
+fromRef :: Ref -> ValueSet
+fromRef r =
+  ValueSet (S.singleton r) False False
+
+fromLocation :: Location -> ValueSet
+fromLocation l =
+  case l of
+    Dynamic r _ -> fromRef r
+    Array r _ -> (fromRef r) { vsValues = True }
+    _ -> mempty
+
+fromValue :: Value -> ValueSet
+fromValue v =
+  case v of
+    Object r -> fromRef (Ref r)
+    _ -> mempty { vsValues = True }
+
+fromBranch :: ValueSet
+fromBranch =
+  mempty { vsBranch = True }
+
 -- | Get all refs known by the event at the moment of execution.
 -- TODO: Fix problem with write
-valuesOf :: UE -> (S.Set Ref, Bool)
+valuesOf :: UE -> ValueSet
 valuesOf (Unique _ e) =
   case operation e of
     Write l _ ->
-      valueL l
+      fromLocation l
     Read l _ ->
-      valueL l
+      fromLocation l
     Acquire r ->
-      (S.singleton r, False)
+      fromRef r
     Release r ->
-      (S.singleton r, False)
+      fromRef r
     Request r ->
-      (S.singleton r, False)
+      fromRef r
     Branch ->
-      (S.empty, True)
-    Enter r _ | pointer r  /= 0->
-      (S.singleton r, False)
+      fromBranch
+    Enter r _ | pointer r /= 0 ->
+      fromRef r
     _ ->
-      (S.empty, False)
-  where
-    valueL :: Location -> (S.Set Ref, Bool)
-    valueL l =
-      case l of
-        Dynamic r _ -> (S.singleton r, False)
-        Array r _ -> (S.singleton r, True)
-        _ -> (S.empty, False)
+      mempty
 
 cfdFree
   :: PartialHistory h
   => h
-  -> (S.Set Ref, Bool)
+  -> ValueSet
   -> UE
   -> [UE]
 cfdFree h _ u =
@@ -223,7 +259,7 @@ cfdFree h _ u =
 cfdSaid
   :: PartialHistory h
   => h
-  -> (S.Set Ref, Bool)
+  -> ValueSet
   -> UE
   -> [UE]
 cfdSaid h _ u =
@@ -243,11 +279,11 @@ cfdSaid h _ u =
 cfdDirk
   :: PartialHistory h
   => h
-  -> (S.Set Ref, Bool)
+  -> ValueSet
   -> UE
   -> [UE]
 cfdDirk h v u =
-  simulateReverse step ([], valuesOf u `joinV` v) (controlFlow h u)  ^. _1
+  simulateReverse step ([], valuesOf u `joinV` (v `joinV` (S.empty, False))) (controlFlow h u)  ^. _1
   where
     step u'@(Unique _ e') (events, vs@(refs, branch)) =
       let events' =
@@ -262,15 +298,86 @@ cfdDirk h v u =
                 events
       in (events', valuesOf u' `joinV` vs)
 
-    joinV (r, b) (r2, b2) =
-      (r `S.union` r2, b || b2)
+    joinV (ValueSet r1 vs b) (r2, b2) =
+      (r1 `S.union` r2, vs || b || b2)
+
+cfdNoBranch
+  :: PartialHistory h
+  => h
+  -> ValueSet
+  -> UE
+  -> [UE]
+cfdNoBranch h v u =
+  simulateReverse step ([], valuesOf u `joinV` (v `joinV` (S.empty, False))) (controlFlow h u)  ^. _1
+  where
+    step u'@(Unique _ e') (events, vs@(refs, branch)) =
+      let events' =
+            case operation e' of
+              Read _ _ | branch ->
+                u':events
+              Read _ (Object v') | Ref v' `S.member` refs  ->
+                u':events
+              Acquire _ ->
+                u':events
+              _ ->
+                events
+      in (events', valuesOf u' `joinV` vs)
+
+    joinV (ValueSet r1 vs _) (r2, b2) =
+      (r1 `S.union` r2, b2)
+
+cfdValuesOnly
+  :: PartialHistory h
+  => h
+  -> ValueSet
+  -> UE
+  -> [UE]
+cfdValuesOnly h v u =
+  simulateReverse step ([], valuesOf u `joinV` (v `joinV` False)) (controlFlow h u)  ^. _1
+  where
+    step u'@(Unique _ e') (events, branch) =
+      let events' =
+            case operation e' of
+              Read _ _ | branch ->
+                u':events
+              Acquire _ ->
+                u':events
+              _ ->
+                events
+      in (events', valuesOf u' `joinV` branch)
+
+    joinV (ValueSet r vs b) b2 =
+      (vs || b2)
+
+cfdBranchOnly
+  :: PartialHistory h
+  => h
+  -> ValueSet
+  -> UE
+  -> [UE]
+cfdBranchOnly h v u =
+  simulateReverse step ([], valuesOf u `joinV` (v `joinV` False)) (controlFlow h u)  ^. _1
+  where
+    step u'@(Unique _ e') (events, branch) =
+      let events' =
+            case operation e' of
+              Read _ _ | branch ->
+                u':events
+              Acquire _ ->
+                u':events
+              _ ->
+                events
+      in (events', valuesOf u' `joinV` branch)
+
+    joinV (ValueSet r vs b) b2 =
+      (vs || b || b2)
 
 -- | For a given event, choose all the reads, and locks, that needs to be
 -- | consistent for this event to also be consistent.
 cfdRVPredict
   :: PartialHistory h
   => h
-  -> (S.Set Ref, Bool)
+  -> ValueSet
   -> UE
   -> [UE]
 cfdRVPredict h v u =
@@ -287,18 +394,18 @@ cfdRVPredict h v u =
                   events
       in (events', valuesOf u' `joinV` branch)
 
-    joinV (r, b) b2 =
-      (not (S.null r)) || b || b2
+    joinV (ValueSet r vs b) b2 =
+      (not (S.null r)) || vs || b || b2
 
 controlFlowConsistency
   :: PartialHistory h
   => LockMap
-  -> (h -> (S.Set Ref, Bool) -> UE -> [UE])
+  -> (h -> ValueSet -> UE -> [UE])
   -> S.Set UE
   -> h
   -> LIA UE
 controlFlowConsistency lm cfd us h =
-  consistent (S.empty) (S.toList us) (S.unions [ cfc (S.empty, False) u | u <- S.toList us ])
+  consistent (S.empty) (S.toList us) (S.unions [ cfc mempty u | u <- S.toList us ])
   where
 
   cfc v u =
@@ -315,7 +422,7 @@ controlFlowConsistency lm cfd us h =
     visited' =
       visited `S.union` deps
 
-    readConsitency r (l, v) =
+    readConsitency r (l, v) = -- | trace ("read: " ++ (ppEvent $ normal r) ++ " - " ++ show (length path)) True =
       -- Make sure that location has any writes
       case M.lookup l writes of
         Nothing ->
@@ -323,7 +430,15 @@ controlFlowConsistency lm cfd us h =
           -- is supposed to.
           And []
         Just rwrites ->
-          case [ w | (v', w) <- rwrites, v' == v, r ~/> w ] of
+          case
+            [ w
+            | (v', w) <- rwrites
+            , v' == v
+            , r ~/> w
+            , not $ any (!< w) (r:path)
+            -- ^ If the write is after any of things in the path, then we know that
+            -- it cannot be the write.
+            ] of
             [] ->
               -- If there is no writes with the same value, that not is ordered
               -- after the read, then assume that the read must be reading
@@ -332,28 +447,22 @@ controlFlowConsistency lm cfd us h =
               And [ r ~> w' | (_, w') <- rwrites ]
             rvwrites ->
               Or
-              [ And $ consistent visited' (r:path) (cfc (val v) w) : w ~> r :
+              [ And $ consistent visited' (r:path) (cfc (fromValue v) w) : w ~> r :
                 [ Or [ w' ~> w, r ~> w']
                 | (_, w') <- rwrites
                 , w' /= w , w' ~/> w, r ~/> w'
                 ]
               | w <- rvwrites
-              , not $ any (w ~/>) (r:path)
               ]
-
-    val v =
-      case v of
-        Object r -> (S.singleton (Ref r), False)
-        _ -> (S.empty, True)
 
     lockConsitency a ref' =
       -- Any acquire we test is already controlFlowConsistent, covered by the
       -- dependencies in the controlFlowConsistencies.
       And $
       [ Or $ [ a ~> a' ]
-        ++ if not $ any (r' ~/>) (a:path)
+        ++ if not $ any (!< r') (a:path)
            then [ And [ r' ~> a
-                      , consistent visited' (a:path) (cfc (S.empty, False) r')
+                      , consistent visited' (a:path) (cfc mempty r')
                       ]
                 ]
            else []
@@ -437,6 +546,7 @@ permute
   -> a
   -> EitherT (LIA UE) m (Proof a)
 permute prover h a = do
+  -- traceM $ "Solving: " ++ show (liaSize cnts)
   solution <- solve (enumerate h) cnts
   case solution of
     Just hist ->
@@ -461,6 +571,21 @@ rvpredict :: LockMap -> Prover
 rvpredict lm h es =
   And $ (equate es):
     ([ sc, mhb, controlFlowConsistency lm cfdRVPredict es] <*> [h])
+
+refsOnly :: LockMap -> Prover
+refsOnly lm h es =
+  And $ (equate es) :
+    ([ sc, mhb, controlFlowConsistency lm cfdNoBranch es] <*> [h])
+
+branchOnly :: LockMap -> Prover
+branchOnly lm h es =
+  And $ (equate es) :
+    ([ sc, mhb, controlFlowConsistency lm cfdBranchOnly es] <*> [h])
+
+valuesOnly :: LockMap -> Prover
+valuesOnly lm h es =
+  And $ (equate es) :
+    ([ sc, mhb, controlFlowConsistency lm cfdValuesOnly es] <*> [h])
 
 free :: LockMap -> Prover
 free lm h es =

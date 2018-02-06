@@ -42,6 +42,9 @@ data Event = Event
   , operation :: !Operation
   } deriving (Show, Eq, Ord)
 
+ppEvent :: Event -> String
+ppEvent e = 't' : (show (threadId $ thread e) ++ '.' : show (order e))
+
 instance PartialOrder Event where
   cmp a b | thread a == thread b =
     Just $ on compare order a b

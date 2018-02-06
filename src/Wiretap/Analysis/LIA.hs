@@ -10,6 +10,8 @@ module Wiretap.Analysis.LIA
   , toCNF
   , solve
   , toZ3
+
+  , liaSize
   )
 where
 
@@ -34,6 +36,14 @@ data LIA e
   | And [LIA e]
   | Or [LIA e]
   deriving (Show)
+
+liaSize :: LIA e -> Integer
+liaSize lia =
+  case lia of
+    Order _ _ -> 1
+    Eq _ _ -> 1
+    And ls -> 1 + sum (map liaSize ls)
+    Or ls -> 1 + sum (map liaSize ls)
 
 infixl 8 ~>
 (~>) :: e -> e -> LIA e

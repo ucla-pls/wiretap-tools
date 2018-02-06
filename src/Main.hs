@@ -90,13 +90,16 @@ Filters are applicable to dataraces and deadlock analyses.
 Provers:
 A prover is an algorithm turns a history into a constraint.
 
-  none:      No constraints except that the candidate has to be placed next to
-             each other.
-  free:      A prover that only uses must-happen-before constraints, and sequential
-             consistency.
-  said:      The prover used in Said et. al. 2011.
-  rvpredict: A prover based on Huang et. al. 2014.
-  dirk:      The data flow sentisive control-flow consistency alogrithm [default].
+  none:       No constraints except that the candidate has to be placed next to
+              each other.
+  free:       A prover that only uses must-happen-before constraints, and sequential
+              consistency.
+  valuesonly: An unsound prover that only takes values into account.
+  branchonly: An unsound prover that only take branch events into account.
+  refsonly:   An unsound prover that only takes refs into account.
+  dirk:       The data flow sentisive control-flow consistency alogrithm [default].
+  rvpredict:  A prover based on Huang et. al. 2014.
+  said:       The prover used in Said et. al. 2011.
 |]
 
 data Config = Config
@@ -388,12 +391,15 @@ proveCandidates config p generator toString events =
 
     getProver lm name =
       case name of
-        "said"      -> said lm
-        "dirk"      -> dirk lm
-        "rvpredict" -> rvpredict lm
-        "free"      -> free lm
-        "none"      -> none
-        _          -> error $ "Unknown prover: '" ++ name ++ "'"
+        "said"         -> said lm
+        "dirk"         -> dirk lm
+        "rvpredict"    -> rvpredict lm
+        "free"         -> free lm
+        "valuesonly"   -> valuesOnly lm
+        "refsonly"     -> refsOnly lm
+        "branchonly"   -> branchOnly lm
+        "none"         -> none
+        _              -> error $ "Unknown prover: '" ++ name ++ "'"
 
 runAll :: (Monad m') => a -> [a -> m' a] -> m' a
 runAll a = L.foldl' (>>=) $ pure a

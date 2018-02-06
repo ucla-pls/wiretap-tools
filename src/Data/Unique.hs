@@ -4,11 +4,17 @@ import           Data.Function    (on)
 import qualified Data.IntMap      as M
 import           Data.Traversable
 
+import Data.PartialOrder
+
 {-| Takes elements and make them unique by assigning an identifier -}
 data Unique e = Unique
  { idx    :: !Int
  , normal :: e
  } deriving (Show)
+
+instance PartialOrder e => PartialOrder (Unique e) where
+  cmp (Unique _ a) (Unique _ b) = cmp a b
+
 
 toPair :: Unique e -> (Int, e)
 toPair e = (idx e, normal e)
