@@ -3,16 +3,19 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TemplateHaskell  #-}
 module Wiretap.Analysis.Permute
-  ( dirk
-  , rvpredict
-  , said
-  , free
+  ( cdfDirk
+  , cdfRVPredict
+  , cdfSaid
+  , cdfFree
+  , cdfRefsOnly
+  , cdfBranchOnly
+  , cdfValuesOnly
   , none
-  , permute
 
-  , refsOnly
-  , branchOnly
-  , valuesOnly
+  , CDF
+
+  , permute
+  , permuteBatch
 
   , Candidate(..)
   , Proof(..)
@@ -23,21 +26,25 @@ module Wiretap.Analysis.Permute
   where
 
 import           Prelude                hiding (reads)
+import           Control.Monad.Trans.Either
 
 import           Control.Lens           hiding (none)
 import           Control.Monad.IO.Class
-import           Control.Monad.Trans.Either
+import           Control.Monad.Trans.Class (lift)
 
 import qualified Data.List              as L
 import qualified Data.Map               as M
+import qualified Data.IntMap               as IM
 import qualified Data.Set               as S
 import           Data.Unique
+
+import Z3.Monad (evalZ3, MonadZ3)
 
 import           Data.Maybe (catMaybes)
 import           Control.Monad
 
 import           Wiretap.Analysis.LIA
-import           Data.PartialOrder
+-- import           Data.PartialOrder
 
 import           Wiretap.Data.Event
 import           Wiretap.Data.Proof
@@ -240,13 +247,13 @@ valuesOf (Unique _ e) =
     _ ->
       mempty
 
-cfdFree
+cdfFree
   :: PartialHistory h
   => h
   -> ValueSet
   -> UE
   -> [UE]
-cfdFree h _ u =
+cdfFree h _ u =
   simulateReverse step [] (controlFlow h u)
   where
     step u'@(Unique _ e') events =
@@ -256,13 +263,13 @@ cfdFree h _ u =
         _ ->
           events
 
-cfdSaid
+cdfSaid
   :: PartialHistory h
   => h
   -> ValueSet
   -> UE
   -> [UE]
-cfdSaid h _ u =
+cdfSaid h _ u =
   simulateReverse step [] (controlFlow h u)
   where
     step u'@(Unique _ e') events =
@@ -276,13 +283,13 @@ cfdSaid h _ u =
 
 -- | For a given event, choose all the reads, and locks, that needs to be
 -- | consistent for this event to also be consistent.
-cfdDirk
+cdfDirk
   :: PartialHistory h
   => h
   -> ValueSet
   -> UE
   -> [UE]
-cfdDirk h v u =
+cdfDirk h v u =
   simulateReverse step ([], valuesOf u `joinV` (v `joinV` (S.empty, False))) (controlFlow h u)  ^. _1
   where
     step u'@(Unique _ e') (events, vs@(refs, branch)) =
@@ -301,38 +308,36 @@ cfdDirk h v u =
     joinV (ValueSet r1 vs b) (r2, b2) =
       (r1 `S.union` r2, vs || b || b2)
 
-cfdNoBranch
+cdfRefsOnly
   :: PartialHistory h
   => h
   -> ValueSet
   -> UE
   -> [UE]
-cfdNoBranch h v u =
-  simulateReverse step ([], valuesOf u `joinV` (v `joinV` (S.empty, False))) (controlFlow h u)  ^. _1
+cdfRefsOnly h v u =
+  simulateReverse step ([], valuesOf u `joinV` (v `joinV` S.empty)) (controlFlow h u)  ^. _1
   where
-    step u'@(Unique _ e') (events, vs@(refs, branch)) =
+    step u'@(Unique _ e') (events, refs) =
       let events' =
             case operation e' of
-              Read _ _ | branch ->
-                u':events
               Read _ (Object v') | Ref v' `S.member` refs  ->
                 u':events
               Acquire _ ->
                 u':events
               _ ->
                 events
-      in (events', valuesOf u' `joinV` vs)
+      in (events', valuesOf u' `joinV` refs)
 
-    joinV (ValueSet r1 vs _) (r2, b2) =
-      (r1 `S.union` r2, b2)
+    joinV (ValueSet r1 _ _) r2 =
+      (r1 `S.union` r2)
 
-cfdValuesOnly
+cdfValuesOnly
   :: PartialHistory h
   => h
   -> ValueSet
   -> UE
   -> [UE]
-cfdValuesOnly h v u =
+cdfValuesOnly h v u =
   simulateReverse step ([], valuesOf u `joinV` (v `joinV` False)) (controlFlow h u)  ^. _1
   where
     step u'@(Unique _ e') (events, branch) =
@@ -346,16 +351,16 @@ cfdValuesOnly h v u =
                 events
       in (events', valuesOf u' `joinV` branch)
 
-    joinV (ValueSet r vs b) b2 =
+    joinV (ValueSet _ vs _) b2 =
       (vs || b2)
 
-cfdBranchOnly
+cdfBranchOnly
   :: PartialHistory h
   => h
   -> ValueSet
   -> UE
   -> [UE]
-cfdBranchOnly h v u =
+cdfBranchOnly h v u =
   simulateReverse step ([], valuesOf u `joinV` (v `joinV` False)) (controlFlow h u)  ^. _1
   where
     step u'@(Unique _ e') (events, branch) =
@@ -369,18 +374,18 @@ cfdBranchOnly h v u =
                 events
       in (events', valuesOf u' `joinV` branch)
 
-    joinV (ValueSet r vs b) b2 =
+    joinV (ValueSet _ vs b) b2 =
       (vs || b || b2)
 
 -- | For a given event, choose all the reads, and locks, that needs to be
 -- | consistent for this event to also be consistent.
-cfdRVPredict
+cdfRVPredict
   :: PartialHistory h
   => h
   -> ValueSet
   -> UE
   -> [UE]
-cfdRVPredict h v u =
+cdfRVPredict h v u =
   simulateReverse step ([], (valuesOf u `joinV` (v `joinV` False))) (controlFlow h u)  ^. _1
   where
     step u'@(Unique _ e') (events, branch) =
@@ -397,200 +402,268 @@ cfdRVPredict h v u =
     joinV (ValueSet r vs b) b2 =
       (not (S.null r)) || vs || b || b2
 
-controlFlowConsistency
+-- controlFlowConsistency
+--   :: PartialHistory h
+--   => LockMap
+--   -> (h -> ValueSet -> UE -> [UE])
+--   -> S.Set UE
+--   -> h
+--   -> LIA UE
+-- controlFlowConsistency lm cfd us h =
+--   consistent (S.empty) (S.toList us) (S.unions [ cfc mempty u | u <- S.toList us ])
+--   where
+
+--   cfc v u =
+--     S.fromAscList (cfd h v u)
+
+--   consistent visited path deps =
+--     And [ And $ onReads readConsitency depends
+--         , And $ onNonReentrantAcquires lockConsitency depends
+--         ]
+--     where
+--     depends =
+--       deps S.\\ visited
+
+--     visited' =
+--       visited `S.union` deps
+
+--     readConsitency r (l, v) = -- | trace ("read: " ++ (ppEvent $ normal r) ++ " - " ++ show (length path)) True =
+--       -- Make sure that location has any writes
+--       case M.lookup l writes of
+--         Nothing ->
+--           -- If no writes assume that the read is consistent, ei. Reads what it
+--           -- is supposed to.
+--           And []
+--         Just rwrites ->
+--           case
+--             [ w
+--             | (v', w) <- rwrites
+--             , v' == v
+--             , r ~/> w
+--             , not $ any (!< w) (r:path)
+--             -- ^ If the write is after any of things in the path, then we know that
+--             -- it cannot be the write.
+--             ] of
+--             [] ->
+--               -- If there is no writes with the same value, that not is ordered
+--               -- after the read, then assume that the read must be reading
+--               -- something that was written before, ei. ordered before all other writes.
+--               -- NOTE: This assumption requires the history to be consistent.
+--               And [ r ~> w' | (_, w') <- rwrites ]
+--             rvwrites ->
+--               Or
+--               [ And $ consistent visited' (r:path) (cfc (fromValue v) w) : w ~> r :
+--                 [ Or [ w' ~> w, r ~> w']
+--                 | (_, w') <- rwrites
+--                 , w' /= w , w' ~/> w, r ~/> w'
+--                 ]
+--               | w <- rvwrites
+--               ]
+
+--     lockConsitency a ref' =
+--       -- Any acquire we test is already controlFlowConsistent, covered by the
+--       -- dependencies in the controlFlowConsistencies.
+--       And $
+--       [ Or $ [ a ~> a' ]
+--         ++ if not $ any (!< r') (a:path)
+--            then [ And [ r' ~> a
+--                       , consistent visited' (a:path) (cfc mempty r')
+--                       ]
+--                 ]
+--            else []
+--       | (a', r') <- pairs
+--       , a' /= a, a' ~/> a, a' ~/> a
+--       ] ++
+--       [ a ~> a'
+--       | a' <- da
+--       , a' /= a, a' ~/> a, a' ~/> a
+--       ]
+--       where
+--         (_, pairs, da) = case M.lookup ref' lockPairsWithRef of
+--           Just pairs' -> pairs'
+--           Nothing ->
+--             error $ "The ref " ++ show ref'
+--                  ++ " has no lock-pairs. (Should not happen)"
+--   writes =
+--     mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
+
+--   onNonReentrantAcquires f deps =
+--     catMaybes $ onAcquires (\e l -> do
+--       guard $ nonreentrant lm e l
+--       return $ f e l
+--      ) deps
+
+--   locksWithRef =
+--     mapOnFst $ onEvent filter' (flip (,)) h
+--     where
+--       filter' (Acquire l) = Just l
+--       filter' (Release l) = Just l
+--       filter' _           = Nothing
+
+--   -- releaseFromAcquire :: M.Map UE UE
+--   -- releaseFromAcquire =
+--   --   M.fromList . concatMap (^. _2) $ M.elems lockPairsWithRef
+
+lockPairsWithRef
+  :: PartialHistory h
+  => h
+  -> M.Map Ref ([UE], [(UE, UE)], [UE])
+lockPairsWithRef h =
+  M.map (simulateReverse pairer ([], [], [])) locksWithRef
+  where
+    pairer u@(Unique _ e) s@(dr, pairs, da)=
+      case operation e of
+        Acquire _ ->
+          case dr of
+            []     -> (dr, pairs, u:da)
+            [r]    -> ([], (u, r):pairs, da)
+            _:dr'  -> (dr', pairs, da)
+        Release _ ->
+          (u:dr, pairs, da)
+        _ -> s
+    locksWithRef =
+      mapOnFst $ onEvent filter' (flip (,)) h
+      where
+        filter' (Acquire l) = Just l
+        filter' (Release l) = Just l
+        filter' _           = Nothing
+
+onNonReentrantAcquires
   :: PartialHistory h
   => LockMap
-  -> (h -> ValueSet -> UE -> [UE])
-  -> S.Set UE
+  -> (UE -> Ref -> a)
   -> h
-  -> LIA UE
-controlFlowConsistency lm cfd us h =
-  consistent (S.empty) (S.toList us) (S.unions [ cfc mempty u | u <- S.toList us ])
+  -> [a]
+onNonReentrantAcquires lm f deps =
+  catMaybes $ onAcquires (\e l -> do
+    guard $ nonreentrant lm e l
+    return $ f e l
+    ) deps
+
+type CDF = ValueSet -> UE -> [UE]
+
+phiExec
+  :: LockMap
+  -> CDF
+  -> ValueSet
+  -> UE
+  -> LIA' Int UE
+phiExec lm cdf v e =
+  And
+  [ And $ onReads (\r _ -> Var (idx r)) depends
+  , And $ onNonReentrantAcquires lm (\a _ -> Var (idx a)) depends
+  ]
   where
+    depends = cdf v e
 
-  cfc v u =
-    S.fromAscList (cfd h v u)
+phiRead
+  :: LockMap
+  -> M.Map Location [(Value, UE)]
+  -> CDF
+  -> UE -> (Location, Value)
+  -> LIA' Int UE
+phiRead lm writes cdf r (l, v) =
+  case M.lookup l writes of
+    Nothing ->
+      And []
+      -- ^ If no writes assume that the read is consistent, ei. Reads what it
+      -- is supposed to.
+    Just rwrites ->
+      case [ w | (v', w) <- rwrites , v' == v , r ~/> w ] of
+        [] ->
+          And [ r ~> w' | (_, w') <- rwrites ]
+          -- ^ If there is no writes with the same value, that not is ordered
+          -- after the read, then assume that the read must be reading
+          -- something that was written before, ei. ordered before all other writes.
+        rvwrites ->
+          Or
+          [ And $ phiExec lm cdf (fromValue v) w : w ~> r :
+            [ Or [ w' ~> w, r ~> w']
+            | (_, w') <- rwrites
+            , w' /= w , w' ~/> w, r ~/> w'
+            ]
+          | w <- rvwrites
+          ]
 
-  consistent visited path deps =
-    And [ And $ onReads readConsitency depends
-        , And $ onNonReentrantAcquires lockConsitency depends
-        ]
-    where
-    depends =
-      deps S.\\ visited
-
-    visited' =
-      visited `S.union` deps
-
-    readConsitency r (l, v) = -- | trace ("read: " ++ (ppEvent $ normal r) ++ " - " ++ show (length path)) True =
-      -- Make sure that location has any writes
-      case M.lookup l writes of
-        Nothing ->
-          -- If no writes assume that the read is consistent, ei. Reads what it
-          -- is supposed to.
-          And []
-        Just rwrites ->
-          case
-            [ w
-            | (v', w) <- rwrites
-            , v' == v
-            , r ~/> w
-            , not $ any (!< w) (r:path)
-            -- ^ If the write is after any of things in the path, then we know that
-            -- it cannot be the write.
-            ] of
-            [] ->
-              -- If there is no writes with the same value, that not is ordered
-              -- after the read, then assume that the read must be reading
-              -- something that was written before, ei. ordered before all other writes.
-              -- NOTE: This assumption requires the history to be consistent.
-              And [ r ~> w' | (_, w') <- rwrites ]
-            rvwrites ->
-              Or
-              [ And $ consistent visited' (r:path) (cfc (fromValue v) w) : w ~> r :
-                [ Or [ w' ~> w, r ~> w']
-                | (_, w') <- rwrites
-                , w' /= w , w' ~/> w, r ~/> w'
-                ]
-              | w <- rvwrites
-              ]
-
-    lockConsitency a ref' =
-      -- Any acquire we test is already controlFlowConsistent, covered by the
-      -- dependencies in the controlFlowConsistencies.
-      And $
-      [ Or $ [ a ~> a' ]
-        ++ if not $ any (!< r') (a:path)
-           then [ And [ r' ~> a
-                      , consistent visited' (a:path) (cfc mempty r')
-                      ]
-                ]
-           else []
-      | (a', r') <- pairs
-      , a' /= a, a' ~/> a, a' ~/> a
-      ] ++
+phiAcq
+  :: LockMap
+  -> (M.Map Ref ([UE], [(UE, UE)], [UE]))
+  -> CDF
+  -> UE -> Ref
+  -> LIA' Int UE
+phiAcq lm lpwr cdf a ref' =
+  And
+  [ And
+    [ Or
       [ a ~> a'
-      | a' <- da
-      , a' /= a, a' ~/> a, a' ~/> a
+      , And [ r' ~> a, phiExec lm cdf mempty (r') ]
       ]
-      -- case M.lookup a releaseFromAcquire of
-      --   Just r ->
-      --     And $
-      --     [ Or
-      --       [ And [ r' ~> a, consistent visited' (cfc (S.empty, False) r') ]
-      --         -- ^ Either the other pair has to come before the the current pair
-      --       , r ~> a'
-      --         -- ^ Or it happened afterwards
-      --       ]
-      --     | (a', r') <- pairs
-      --     , a' `S.member` visited'
-      --     , a' /= a, a' ~/> a, a' ~/> a
-      --     ] ++ map (~> a) dr
-      --       -- ^ This might be superfluous.
-      --       ++ map (r ~>) da
-      --       -- ^ If we do not have an release, make sure that we are ordered after all
-      --       -- other locks.
-      --   Nothing ->
-      --     And
-      --     [ r' ~> a, consistent visited' (cfc (S.empty, False) r')
-      --     | (a', r') <- pairs, r' ~/> a
-      --     , a' `S.member` visited'
-      --     ]
-      where
-        (_, pairs, da) = case M.lookup ref' lockPairsWithRef of
-          Just pairs' -> pairs'
-          Nothing ->
-            error $ "The ref " ++ show ref'
-                 ++ " has no lock-pairs. (Should not happen)"
-  writes =
-    mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
+    | (a', r') <- pairs
+    , a' /= a, a' ~/> a, a' ~/> a
+    ]
+  , And
+    [ a ~> a'
+    | a' <- da
+    , a' /= a, a' ~/> a, a' ~/> a
+    ]
+  ]
+  where
+    (_, pairs, da) =
+      case M.lookup ref' lpwr of
+        Just pairs' -> pairs'
+        Nothing -> error $ "The ref " ++ show ref' ++ " has no lock-pairs. (Should not happen)"
 
-  onNonReentrantAcquires f deps =
-    catMaybes $ onAcquires (\e l -> do
-      guard $ nonreentrant lm e l
-      return $ f e l
-     ) deps
+generateVars
+  :: PartialHistory h
+  => LockMap
+  -> (h -> CDF)
+  -> h
+  -> IM.IntMap (LIA' Int UE)
+generateVars lm f h =
+  IM.fromList $
+    onReads (\r x -> (idx r, phiRead lm writes (f h) r x)) h
+    ++ onNonReentrantAcquires lm (\a l -> (idx a, phiAcq lm lpwr (f h) a l)) h
+  where
+    lpwr = lockPairsWithRef h
+    writes = mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
 
-  locksWithRef =
-    mapOnFst $ onEvent filter' (flip (,)) h
-    where
-      filter' (Acquire l) = Just l
-      filter' (Release l) = Just l
-      filter' _           = Nothing
-
-  -- releaseFromAcquire :: M.Map UE UE
-  -- releaseFromAcquire =
-  --   M.fromList . concatMap (^. _2) $ M.elems lockPairsWithRef
-
-  lockPairsWithRef :: M.Map Ref ([UE], [(UE, UE)], [UE])
-  lockPairsWithRef =
-    M.map (simulateReverse pairer ([], [], [])) locksWithRef
-    where
-      pairer u@(Unique _ e) s@(dr, pairs, da)=
-        case operation e of
-          Acquire _ ->
-            case dr of
-              []     -> (dr, pairs, u:da)
-              [r]    -> ([], (u, r):pairs, da)
-              _:dr'  -> (dr', pairs, da)
-          Release _ ->
-            (u:dr, pairs, da)
-          _ -> s
+phiExecE
+  :: LockMap
+  -> CDF
+  -> S.Set UE
+  -> LIA' Int UE
+phiExecE lm cdf es =
+  And $ equate es :
+  [ phiExec lm cdf mempty e
+  | e <- S.toList es
+  ]
 
 {-| permute takes partial history and two events, if the events can be arranged
 next to each other return. -}
 permute
   :: (PartialHistory h, MonadIO m, Candidate a)
-  => Prover
+  => (LockMap, (h -> CDF))
   -> h
   -> a
-  -> EitherT (LIA UE) m (Proof a)
-permute prover h a = do
-  -- traceM $ "Solving: " ++ show (liaSize cnts)
-  solution <- solve (enumerate h) cnts
-  case solution of
-    Just hist ->
-      return $ Proof a cnts (prefixContaining es hist)
-    Nothing ->
-      left cnts
-  where
-    es = (candidateSet a)
-    cnts = prover h es
+  -> m (Either (LIA UE) (Proof a))
+permute (lm, cdf) h a = do
+  liftIO . evalZ3 . runEitherT $ do
+    f <- lift $ permuteBatch (lm, cdf) h
+    f a
 
-said :: LockMap -> Prover
-said lm h es =
-  And $ (equate es):
-    ([ sc, mhb, controlFlowConsistency lm cfdSaid es] <*> [h])
-
-dirk :: LockMap -> Prover
-dirk lm h es =
-  And $ (equate es):
-    ([ sc, mhb, controlFlowConsistency lm cfdDirk es] <*> [h])
-
-rvpredict :: LockMap -> Prover
-rvpredict lm h es =
-  And $ (equate es):
-    ([ sc, mhb, controlFlowConsistency lm cfdRVPredict es] <*> [h])
-
-refsOnly :: LockMap -> Prover
-refsOnly lm h es =
-  And $ (equate es) :
-    ([ sc, mhb, controlFlowConsistency lm cfdNoBranch es] <*> [h])
-
-branchOnly :: LockMap -> Prover
-branchOnly lm h es =
-  And $ (equate es) :
-    ([ sc, mhb, controlFlowConsistency lm cfdBranchOnly es] <*> [h])
-
-valuesOnly :: LockMap -> Prover
-valuesOnly lm h es =
-  And $ (equate es) :
-    ([ sc, mhb, controlFlowConsistency lm cfdValuesOnly es] <*> [h])
-
-free :: LockMap -> Prover
-free lm h es =
-  And $ (equate es) :
-    ([ sc, mhb, controlFlowConsistency lm cfdFree es] <*> [h])
+permuteBatch
+  :: (PartialHistory h, MonadZ3 m, Candidate a)
+  => (LockMap, (h -> CDF))
+  -> h
+  -> m (a -> EitherT (LIA UE) m (Proof a))
+permuteBatch (lm,cdf) h = do
+  let vars = generateVars lm cdf h
+  solver <- setupLIA (enumerate h) vars
+  return $ \a -> do
+    let es = candidateSet a
+        x = And $ phiExecE lm (cdf h) es : ([ sc, mhb] <*> [h])
+    result <- lift $ solver x
+    maybe (left x) (right . Proof a x . prefixContaining es) result
 
 none :: h -> CandidateSet -> LIA UE
 none _ es =

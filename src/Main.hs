@@ -1,6 +1,6 @@
 {-# LANGUAGE BangPatterns        #-}
 {-# LANGUAGE FlexibleContexts    #-}
-{-# LANGUAGE LambdaCase          #-}
+ {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE RankNTypes          #-}
@@ -13,11 +13,16 @@ import           System.Environment               (getArgs)
 import           System.FilePath
 import           System.IO
 
+-- import Debug.Trace
+
 import           Control.Applicative
 import           Control.Lens                     (over, _2)
 import           Control.Monad
 import           Control.Monad.Trans.Either
-import           Control.Monad.Trans.State.Strict
+import           Control.Monad.Trans.State.Strict (StateT)
+import           Control.Monad.State.Class
+
+-- import           Z3.Monad (evalZ3, MonadZ3)
 
 import qualified Data.List                        as L
 import qualified Data.Map.Strict                  as M
@@ -248,7 +253,7 @@ proveCandidates
   :: forall a m. (Candidate a, Show a, Ord a, MonadIO m)
   => Config
   -> Program.Program
-  -> (forall h . (PartialHistory h) => h -> Producer a (ProverT m) ())
+  -> (forall h m'. (PartialHistory h, MonadState ProverState m') => h -> Producer a m' ())
   -> (a -> IO String)
   -> Producer Event m ()
   -> m ()
@@ -312,33 +317,65 @@ proveCandidates config p generator toString events =
       :: forall h. (PartialHistory h)
       => h
       -> StateT ProverState m ()
-    chunkProver chunk =
-      runEffect . for (generator chunk) $ \c ->  do
-        -- lift get >>= liftIO . print
-        lift $ candidateProver chunk c
-        -- lift get >>= liftIO . print
-
-    first f = bimapEitherT f id
-
-    candidateProver hist c = do
+    chunkProver chunk = do
       lm <- gets lockMap
-      result <- runEitherT $
-        runAll c (map getFilter $ filters config)
-        >>= first (onProverError hist c)
-          . permute (getProver lm $ prover config) hist
-      case result of
-        Left msg -> liftIO $ do
-          when (verbose config) $ do
-            hPutStrLn stderr "Could not prove candidate:"
-            hPutStr stderr "  " >> toString c >>= hPutStrLn stderr
-            hPutStrLn stderr "The reason was:"
-            msg' <- msg
-            hPutStr stderr "  " >> hPutStrLn stderr msg'
-        Right proof -> do
-          str <- liftIO . toString $ candidate proof
-          modify $ addProven str
-          liftIO $ printProof proof
+      case getProver (prover config) of
+        Nothing -> do
+          foreachCandidate chunk $ \c -> do
+            result <- runEitherT $ mapM ($ c) $ map getFilter (filters config)
+            case result of
+              Left msg -> liftIO $ do
+                when (verbose config) $ do
+                  hPutStrLn stderr "Could not prove candidate:"
+                  hPutStr stderr "  " >> toString c >>= hPutStrLn stderr
+                  hPutStrLn stderr "The reason was:"
+                  msg' <- msg
+                  hPutStr stderr "  " >> hPutStrLn stderr msg'
+              Right _ -> do
+                str <- liftIO . toString $ c
+                modify $ addProven str
+                liftIO . putStrLn $ str
+        Just cdf ->
+          evalZ3T (solveChunk lm cdf chunk)
 
+    foreachCandidate
+      :: (PartialHistory h, MonadState ProverState m')
+      => h
+      -> (a -> m' ())
+      -> m' ()
+    foreachCandidate chunk fm =
+      runEffect . for (generator chunk) $ \c -> lift $ fm c
+
+    solveChunk
+      :: (PartialHistory h, MonadIO m', MonadState ProverState m')
+      => LockMap
+      -> (h -> CDF)
+      -> h
+      -> Z3T m' ()
+    solveChunk lm cfd chunk = do
+      solver <- permuteBatch (lm, cfd) chunk
+      foreachCandidate chunk $ \c -> do
+        result <- runEitherT $ do
+            _ <- mapM ($ c) $ map getFilter (filters config)
+            first (onProverError chunk c) $ solver c
+        case result of
+          Left msg -> liftIO $ do
+            when (verbose config) $ do
+              hPutStrLn stderr "Could not prove candidate:"
+              hPutStr stderr "  " >> toString c >>= hPutStrLn stderr
+              hPutStrLn stderr "The reason was:"
+              msg' <- msg
+              hPutStr stderr "  " >> hPutStrLn stderr msg'
+          Right proof -> do
+            str <- liftIO . toString $ candidate proof
+            lift . modify $ addProven str
+            liftIO . putStrLn $ str
+
+
+    onProverError
+      :: (PartialHistory h)
+      => h -> a -> LIA UE
+      -> IO String
     onProverError hist c cnts = do
       case outputProof config of
         Just folder -> do
@@ -351,22 +388,27 @@ proveCandidates config p generator toString events =
         Nothing -> do
           return "Could not solve constraints."
 
-    printProof (Proof c _ hist) = do
-      putStrLn =<< toString c
-      case outputProof config of
-        Just folder -> do
-          createDirectoryIfMissing True folder
-          let ls = map (show . idx) . L.sort . S.toList $ candidateSet c
-          withFile (folder </> L.intercalate "-" ls ++ ".hist") WriteMode $
-            \h -> runEffect $ each hist >-> P.map normal >-> writeHistory h
-        Nothing ->
-          return ()
+    -- printProof (Proof c _ hist) = do
+    --   putStrLn =<< toString c
+    --   case outputProof config of
+    --     Just folder -> do
+    --       createDirectoryIfMissing True folder
+    --       let ls = map (show . idx) . L.sort . S.toList $ candidateSet c
+    --       withFile (folder </> L.intercalate "-" ls ++ ".hist") WriteMode $
+    --         \h -> runEffect $ each hist >-> P.map normal >-> writeHistory h
+    --     Nothing ->
+    --       return ()
 
-    getFilter name =
+    getFilter
+      :: (MonadIO m', MonadState ProverState m')
+      => String
+      -> a
+      -> EitherT (IO String) m' ()
+    getFilter name c =
       case name of
-        "lockset" -> \c -> do
-          lm <- lift $ gets lockMap
-          first (\shared -> do
+        "lockset" -> do
+          lm <- gets lockMap
+          void $ first (\shared -> do
               locks <- forM shared $ \(r, (a, b)) -> do
                 inst_a <- instruction p . normal $ a
                 inst_b <- instruction p . normal $ b
@@ -377,28 +419,28 @@ proveCandidates config p generator toString events =
                   ]
               return . L.intercalate "\n" $
                 "Candidates shares locks:" : locks
-             ) $ locksetFilter' lm c
+            ) $ locksetFilter' lm c
         "reject" ->
-          const . left . return $ "Rejected"
-        "unique" -> \c -> do
+          left . return $ "Rejected"
+        "unique" -> do
           str <- liftIO $ toString c
           alreadyProven <- lift $ gets (S.member str . proven)
           if alreadyProven
             then left . return $ "Already proven"
-            else return c
+            else return ()
         _ ->
           error $ "Unknown filter " ++ name
 
-    getProver lm name =
+    getProver name =
       case name of
-        "said"         -> said lm
-        "dirk"         -> dirk lm
-        "rvpredict"    -> rvpredict lm
-        "free"         -> free lm
-        "valuesonly"   -> valuesOnly lm
-        "refsonly"     -> refsOnly lm
-        "branchonly"   -> branchOnly lm
-        "none"         -> none
+        "said"         -> Just cdfSaid
+        "dirk"         -> Just cdfDirk
+        "rvpredict"    -> Just cdfRVPredict
+        "free"         -> Just cdfFree
+        "valuesonly"   -> Just cdfValuesOnly
+        "refsonly"     -> Just cdfRefsOnly
+        "branchonly"   -> Just cdfBranchOnly
+        "none"         -> Nothing
         _              -> error $ "Unknown prover: '" ++ name ++ "'"
 
 runAll :: (Monad m') => a -> [a -> m' a] -> m' a
@@ -408,7 +450,7 @@ cnf2dot
   :: PartialHistory h
   => Program.Program
   -> h
-  -> [[LIAAtom (Unique Event)]]
+  -> [[LIAAtom Int (Unique Event)]]
   -> String
 cnf2dot p h cnf = unlines $
   [ "digraph {"
@@ -448,3 +490,6 @@ cnf2dot p h cnf = unlines $
       [ printAtom "black" True e ]
     printConjunction color es =
       map (printAtom color False) es
+
+first :: (Monad m) => (e -> e') -> EitherT e m a -> EitherT e' m a
+first f = bimapEitherT f id
