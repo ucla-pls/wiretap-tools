@@ -31,6 +31,8 @@ import qualified Data.Set                         as S
 import           Data.Traversable                 (mapM)
 import           Data.Unique
 
+-- import Debug.Trace
+
 import           Pipes
 import qualified Pipes.Lift                       as PL
 import qualified Pipes.Missing                    as PM
@@ -83,14 +85,17 @@ Options:
                                maximal offset, which touches all events is the
                                size.
 
+--ignore IGNORED_FILE         A file containing candidates to ignore.
+
 -v, --verbose                  Produce verbose outputs
 
 Filters:
 Filters are applicable to dataraces and deadlock analyses.
 
-  lockset:   Remove all candidates with shared locks.
-  reject:    Rejects all candidates
-  uniqe:     Only try to prove each candidate once
+  lockset:     Remove all candidates with shared locks.
+  reject:      Rejects all candidates
+  unique:      Only try to prove each candidate once
+  ignored:     Don't try candidates in the ignore set
 
 Provers:
 A prover is an algorithm turns a history into a constraint.
@@ -115,6 +120,7 @@ data Config = Config
   , program       :: Maybe FilePath
   , history       :: Maybe FilePath
   , humanReadable :: Bool
+  , ignoreSet     :: S.Set String
   , chunkSize     :: Maybe Int
   , chunkOffset   :: Int
   } deriving (Show, Read)
@@ -138,10 +144,16 @@ main = do
 
 readConfig :: Arguments -> IO Config
 readConfig args = do
+  ignoreSet' <- case getLongOption "ignore" of
+    Just file ->
+      S.fromList . lines <$> readFile file
+    Nothing ->
+      return $ S.empty
+
   return $ Config
     { verbose = isPresent args $ longOption "verbose"
     , filters = splitOn ','
-        $ getArgWithDefault args "unique,lockset" (longOption "filter")
+        $ getArgWithDefault args "unique,lockset,ignored" (longOption "filter")
     , prover = getArgWithDefault args "dirk" (longOption "prover")
     , outputProof = getLongOption "proof"
     , program = getLongOption "program"
@@ -149,6 +161,7 @@ readConfig args = do
     , chunkSize = read <$> getLongOption "chunk-size"
     , chunkOffset = fromMaybe 1 (read <$> getLongOption "chunk-offset")
     , humanReadable = args `isPresent` longOption "human-readable"
+    , ignoreSet = ignoreSet'
     }
   where
     getLongOption = getArg args . longOption
@@ -369,7 +382,9 @@ proveCandidates config p generator toString events =
           Right proof -> do
             str <- liftIO . toString $ candidate proof
             lift . modify $ addProven str
-            liftIO . putStrLn $ str
+            liftIO $ do
+              putStrLn $ str
+              printProof proof
 
 
     onProverError
@@ -388,16 +403,18 @@ proveCandidates config p generator toString events =
         Nothing -> do
           return "Could not solve constraints."
 
-    -- printProof (Proof c _ hist) = do
-    --   putStrLn =<< toString c
-    --   case outputProof config of
-    --     Just folder -> do
-    --       createDirectoryIfMissing True folder
-    --       let ls = map (show . idx) . L.sort . S.toList $ candidateSet c
-    --       withFile (folder </> L.intercalate "-" ls ++ ".hist") WriteMode $
-    --         \h -> runEffect $ each hist >-> P.map normal >-> writeHistory h
-    --     Nothing ->
-    --       return ()
+    printProof (Proof c lia hist) = do
+      case outputProof config of
+        Just folder -> do
+          createDirectoryIfMissing True folder
+          let ls = map (show . idx) . L.sort . S.toList $ candidateSet c
+          let fn = folder </> L.intercalate "-" ls
+          withFile (fn ++ ".hist") WriteMode $
+            \h -> runEffect $ each hist >-> P.map normal >-> writeHistory h
+          withFile (fn ++ ".dot") WriteMode $ \h ->
+            hPutStr h $ cnf2dot p hist (toCNF lia)
+        Nothing ->
+          return ()
 
     getFilter
       :: (MonadIO m', MonadState ProverState m')
@@ -420,6 +437,11 @@ proveCandidates config p generator toString events =
               return . L.intercalate "\n" $
                 "Candidates shares locks:" : locks
             ) $ locksetFilter' lm c
+        "ignored" -> do
+          str <- liftIO $ toString c
+          if S.member str (ignoreSet config)
+            then left . return $ "In ignore set"
+            else return ()
         "reject" ->
           left . return $ "Rejected"
         "unique" -> do
@@ -485,7 +507,6 @@ cnf2dot p h cnf = unlines $
              "\"" ++ pr a ++ "\" -> \"" ++ pr b ++ "\"; "
           ++ "\"" ++ pr b ++ "\" -> \"" ++ pr a ++ "\""
         _ -> ""
-
     printConjunction _ [e] =
       [ printAtom "black" True e ]
     printConjunction color es =

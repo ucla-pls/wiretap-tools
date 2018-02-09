@@ -37,6 +37,7 @@ import Control.Monad.Fix
 import Data.Unique
 -- import Data.Void
 
+-- import Debug.Trace
 import Z3.Monad
 import qualified Z3.Base as Base
 
@@ -125,7 +126,11 @@ setupLIA elems vars = do
 
   return $ \ lia -> local $ do
     assert =<< solver lia
-    (_, solution) <- withModel $ \m -> mapM (evalInt m . snd) eVars
+    (_, solution) <- withModel $ \m -> do
+      solutions <- mapM (evalInt m . snd) eVars
+      -- variables <- mapM (evalBool m) sVars
+      -- traceM $ show variables
+      return solutions
     case solution of
       Just assignment -> do
         return . Just $ L.sortOn (\e -> assignment IM.! idx e) . map (fst . snd) . IM.toList $ eVars

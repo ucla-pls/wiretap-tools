@@ -10,7 +10,6 @@ module Wiretap.Analysis.Permute
   , cdfRefsOnly
   , cdfBranchOnly
   , cdfValuesOnly
-  , none
 
   , CDF
 
@@ -31,6 +30,8 @@ import           Control.Monad.Trans.Either
 import           Control.Lens           hiding (none)
 import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Class (lift)
+
+
 
 import qualified Data.List              as L
 import qualified Data.Map               as M
@@ -535,10 +536,11 @@ onNonReentrantAcquires
   -> h
   -> [a]
 onNonReentrantAcquires lm f deps =
-  catMaybes $ onAcquires (\e l -> do
+  catMaybes . flip onAcquires deps $ \e l -> do
+    -- traceM $ show (e, l, (lm ! e))
     guard $ nonreentrant lm e l
+    -- traceM $ show "good"
     return $ f e l
-    ) deps
 
 type CDF = ValueSet -> UE -> [UE]
 
@@ -622,7 +624,7 @@ generateVars
 generateVars lm f h =
   IM.fromList $
     onReads (\r x -> (idx r, phiRead lm writes (f h) r x)) h
-    ++ onNonReentrantAcquires lm (\a l -> (idx a, phiAcq lm lpwr (f h) a l)) h
+    ++ (onNonReentrantAcquires lm (\a l -> (idx a, phiAcq lm lpwr (f h) a l)) h)
   where
     lpwr = lockPairsWithRef h
     writes = mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
@@ -664,10 +666,6 @@ permuteBatch (lm,cdf) h = do
         x = And $ phiExecE lm (cdf h) es : ([ sc, mhb] <*> [h])
     result <- lift $ solver x
     maybe (left x) (right . Proof a x . prefixContaining es) result
-
-none :: h -> CandidateSet -> LIA UE
-none _ es =
-  equate es
 
 equate :: CandidateSet -> LIA UE
 equate es =

@@ -72,9 +72,10 @@ locksetSimulation !s history =
       -> State (M.Map Thread [(Ref, UE)]) [(Ref,UE)]
     updateAndGet t f = do
       m <- get
-      let rs = f . fromMaybe [] $ M.lookup t m
+      let l = fromMaybe [] $ M.lookup t m
+      let rs = f l
       put $! M.insert t rs m
-      return rs
+      return l
 
     -- | toLockMap converges the lock stack to a map where all locks reference
     -- | points to the first event to grab it.
