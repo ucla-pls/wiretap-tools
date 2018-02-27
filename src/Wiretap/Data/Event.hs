@@ -26,6 +26,8 @@ newtype Thread = Thread
   { threadId :: Int32
   } deriving (Show, Eq, Ord)
 
+type Order = Int32
+
 instance Binary Thread where
   put = putInt32be . threadId
   get = Thread <$> getInt32be
@@ -38,7 +40,7 @@ prop_ThreadIsBinary = prop_isBinary
 
 data Event = Event
   { thread    :: !Thread
-  , order     :: !Int32
+  , order     :: !Order
   , operation :: !Operation
   } deriving (Show, Eq, Ord)
 

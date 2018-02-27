@@ -23,6 +23,11 @@ crossproduct :: [a] -> [b] -> [(a, b)]
 crossproduct =
   liftM2 (,)
 
+{-| all possible pairs of one list -}
+crossproduct1 :: [a] -> [(a, a)]
+crossproduct1 l =
+  crossproduct l l
+
 groupOnFst :: Eq a
   => [(a, b)]
   -> [(a, [b])]

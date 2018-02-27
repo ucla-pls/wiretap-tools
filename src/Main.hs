@@ -21,6 +21,7 @@ import           Control.Monad
 import           Control.Monad.Trans.Either
 import           Control.Monad.Trans.State.Strict (StateT)
 import           Control.Monad.State.Class
+import           Control.Monad.Writer
 
 -- import           Z3.Monad (evalZ3, MonadZ3)
 
@@ -30,6 +31,7 @@ import           Data.Maybe                       (catMaybes, fromMaybe)
 import qualified Data.Set                         as S
 import           Data.Traversable                 (mapM)
 import           Data.Unique
+import           Data.IORef
 
 -- import Debug.Trace
 
@@ -42,15 +44,14 @@ import           Wiretap.Analysis.Count
 import           Wiretap.Format.Binary
 import           Wiretap.Format.Text
 import           Wiretap.Utils
-
 import           Wiretap.Data.Event
 import           Wiretap.Data.History
 import qualified Wiretap.Data.Program             as Program
-
 import           Wiretap.Analysis.DataRace
 import           Wiretap.Analysis.LIA             hiding ((~>))
 import           Wiretap.Analysis.Lock
 import           Wiretap.Analysis.Permute
+import           Wiretap.Analysis.MustHappenBefore
 
 patterns :: Docopt
 patterns = [docopt|wiretap-tools version 0.1.0.0
@@ -61,6 +62,7 @@ Usage:
    wiretap-tools lockset [-vh] [<history>]
    wiretap-tools dataraces [options] [<history>]
    wiretap-tools deadlocks [options] [<history>]
+   wiretap-tools bugs [options] [<history>]
    wiretap-tools (--help | --version)
 
 Options:
@@ -96,6 +98,7 @@ Filters are applicable to dataraces and deadlock analyses.
   reject:      Rejects all candidates
   unique:      Only try to prove each candidate once
   ignored:     Don't try candidates in the ignore set
+  mhb:         Do not check candidates which is must-happen-before related
 
 Provers:
 A prover is an algorithm turns a history into a constraint.
@@ -153,7 +156,7 @@ readConfig args = do
   return $ Config
     { verbose = isPresent args $ longOption "verbose"
     , filters = splitOn ','
-        $ getArgWithDefault args "unique,lockset,ignored" (longOption "filter")
+        $ getArgWithDefault args "unique,ignored,mhb,lockset" (longOption "filter")
     , prover = getArgWithDefault args "dirk" (longOption "prover")
     , outputProof = getLongOption "proof"
     , program = getLongOption "program"
@@ -195,29 +198,27 @@ runCommand args config = do
 
   onCommand "dataraces" $
     proveCandidates config p
-      (each . raceCandidates) $ candidateToString p
+      (each . raceCandidates) $ prettyPrint p
 
   onCommand "deadlocks" $
     proveCandidates config p (
       \s -> do
         lm <- lift $ gets lockMap
         each $ deadlockCandidates' s lm
-      ) $ candidateToString p
+      ) $ prettyPrint p
+
+  onCommand "bugs" $
+    proveCandidates config p (
+      \s -> do
+        lm <- lift $ gets lockMap
+        each $ BDeadlock <$> deadlockCandidates' s lm
+        each $ BDataRace <$> raceCandidates s
+      ) $ prettyPrint p
 
   where
     getProgram cfg =
       maybe (return Program.empty) Program.fromFolder $
         program config <|> fmap takeDirectory (history cfg)
-
-    candidateToString :: (Candidate a) => Program.Program -> a -> IO String
-    candidateToString p a | humanReadable config =
-      return $
-         L.intercalate "\n" . L.sort . map (pp p . normal) $
-                            (S.toList $ candidateSet a)
-    candidateToString p a =
-      L.intercalate " " . L.sort . map (pp p) <$>
-        mapM (instruction p . normal) (S.toList $ candidateSet a)
-
 
     printLockset pprint (e, locks) | humanReadable config =
       putStrLn $ padStr (pprint e) ' ' 60 ++ " - " ++ locks
@@ -246,6 +247,7 @@ data ProverState = ProverState
   { proven    :: !(S.Set String)
   , lockMap   :: !(UniqueMap (M.Map Ref UE))
   , lockState :: !(LockState)
+  , mhbGraph :: !MHB
   } deriving (Show)
 
 addProven :: String -> ProverState -> ProverState
@@ -259,6 +261,13 @@ updateLockState h p =
 setLockMap :: PartialHistory h => h -> ProverState -> ProverState
 setLockMap h p =
   p { lockMap = fst $ locksetSimulation (lockState p) h }
+
+stateFromChunck :: PartialHistory h => h -> ProverState -> ProverState
+stateFromChunck h p =
+  p { lockMap = fst $ locksetSimulation (lockState p) h
+    , mhbGraph = mustHappenBefore h
+    }
+
 
 type ProverT m = StateT ProverState m
 
@@ -275,7 +284,7 @@ proveCandidates config p generator toString events =
 
   where
     initialState =
-      (ProverState S.empty (fromUniques []) M.empty)
+      (ProverState S.empty (fromUniques []) M.empty mhbEmpty)
 
     logV = hPutStrLn stderr
 
@@ -291,7 +300,7 @@ proveCandidates config p generator toString events =
         Nothing -> do
           -- Read the entire history
           list <- PM.asList $ PM.recoverAll >-> PM.end'
-          lift . modify $ setLockMap list
+          lift . modify $ stateFromChunck list
           yield list
         Just size ->
           -- Read a little at a time
@@ -311,7 +320,7 @@ proveCandidates config p generator toString events =
                       _event <- pp p <$> instruction p (normal event)
                       logV $ "  " ++ pp p r ++ "  " ++ _event
                 [] -> return ()
-          lift . modify $ setLockMap chunk
+          lift . modify $ stateFromChunck chunk
           yield chunk
           if actualChunkSize < size
             then
@@ -366,10 +375,17 @@ proveCandidates config p generator toString events =
       -> h
       -> Z3T m' ()
     solveChunk lm cfd chunk = do
-      solver <- permuteBatch (lm, cfd) chunk
+      r <- liftIO $ newIORef Nothing
       foreachCandidate chunk $ \c -> do
         result <- runEitherT $ do
-            _ <- mapM ($ c) $ map getFilter (filters config)
+            mapM_ ($ c) $ map getFilter (filters config)
+            msolver <- liftIO $ readIORef r
+            solver <- case msolver of
+              Just solver -> return $ solver
+              Nothing -> do
+                solver <- lift $ permuteBatch (lm, cfd) chunk
+                liftIO $ writeIORef r (Just solver)
+                return $ solver
             first (onProverError chunk c) $ solver c
         case result of
           Left msg -> liftIO $ do
@@ -437,6 +453,20 @@ proveCandidates config p generator toString events =
               return . L.intercalate "\n" $
                 "Candidates shares locks:" : locks
             ) $ locksetFilter' lm c
+        "mhb" -> do
+          mg <- gets mhbGraph
+          forM_ (crossproduct1 . S.toList $ candidateSet c) $ \(a, b) ->
+             if mhb mg a b
+             then left $ do
+                inst_a <- instruction p . normal $ a
+                inst_b <- instruction p . normal $ b
+                return $ L.intercalate "\n"
+                  [ "Must happen before related"
+                  , "    " ++ pp p inst_a
+                  , "    " ++ pp p inst_b
+                  ]
+             else return ()
+
         "ignored" -> do
           str <- liftIO $ toString c
           if S.member str (ignoreSet config)
@@ -514,3 +544,19 @@ cnf2dot p h cnf = unlines $
 
 first :: (Monad m) => (e -> e') -> EitherT e m a -> EitherT e' m a
 first f = bimapEitherT f id
+
+data Bug
+  = BDataRace DataRace
+  | BDeadlock Deadlock
+  deriving (Show, Eq, Ord)
+
+instance Candidate Bug where
+  candidateSet bug =
+    case bug of
+      BDataRace a -> candidateSet a
+      BDeadlock a -> candidateSet a
+
+  prettyPrint p bug =
+    case bug of
+      BDataRace a -> ("DR:" ++) <$> prettyPrint p a
+      BDeadlock a -> ("DL:" ++) <$> prettyPrint p a
