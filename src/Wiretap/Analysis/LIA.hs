@@ -35,6 +35,9 @@ import Control.Monad.State.Class
 
 import Control.Monad.Fix
 import Data.Unique
+
+import Data.Traversable
+import Data.Foldable hiding (product)
 -- import Data.Void
 
 -- import Debug.Trace
@@ -45,11 +48,11 @@ import qualified Z3.Base as Base
 type LIA e = LIA' Int e
 
 data LIA' s e
-  = Order e e
-  | Eq e e
-  | And [LIA' s e]
-  | Or [LIA' s e]
-  | Var s
+  = Order !e !e
+  | Eq !e !e
+  | And !([LIA' s e])
+  | Or !([LIA' s e])
+  | Var !s
   deriving (Show)
 
 liaSize :: LIA' s e -> Integer
@@ -111,36 +114,42 @@ environment.
 setupLIA
   :: (MonadZ3 m, Show e)
   => [Unique e]
-  -> IM.IntMap (LIA' Int (Unique e))
+  -> [(Int, (LIA' Int (Unique e)))]
   -> m (LIA' Int (Unique e) -> m (Maybe [Unique e]))
 setupLIA elems vars = do
-  eVars <- IM.fromDistinctAscList
-    <$> mapM (\e -> (idx e,) . (e,) <$> mkFreshIntVar "O") elems
-  sVars <- traverse (\_ -> mkFreshBoolVar "S") vars
+  eVars <-
+    fmap IM.fromDistinctAscList . forM elems $ \e -> do
+      o <- mkFreshIntVar "O"
+      s <- mkFreshBoolVar "S"
+      return (idx e,(e,o,s))
 
-  let solver = toZ3 (lookupOrBreak eVars) (sVars IM.!)
+  let solver = toZ3 (lookupOVar eVars) (lookupSVar eVars)
 
-  _ <- IM.foldrWithKey'
-    (\i lia m -> m >> (assert =<< mkImplies (sVars IM.! i) =<< solver lia))
-    (return ()) vars
+  forM_ vars $ \(var, constraint) -> do
+    let s = lookupSVar eVars var
+    assert =<< mkImplies s =<< solver constraint
 
   return $ \ lia -> local $ do
     assert =<< solver lia
     (_, solution) <- withModel $ \m -> do
-      solutions <- mapM (evalInt m . snd) eVars
-      -- variables <- mapM (evalBool m) sVars
-      -- traceM $ show variables
+      solutions <- mapM (\(_, o, _) -> evalInt m o) eVars
       return solutions
     case solution of
       Just assignment -> do
-        return . Just $ L.sortOn (\e -> assignment IM.! idx e) . map (fst . snd) . IM.toList $ eVars
+        return . Just $ L.sortOn (\e -> assignment IM.! idx e) elems
       Nothing ->
         return Nothing
 
-lookupOrBreak :: Show e => IM.IntMap (Unique e, t) -> Unique e -> t
-lookupOrBreak vars e =
+lookupOVar :: Show e => IM.IntMap (Unique e, a, b) -> Unique e -> a
+lookupOVar vars e =
   case IM.lookup (idx e) vars of
-    Just (_, var) -> var
+    Just (_, o, _) -> o
+    Nothing -> error $ "Could not find " ++ show e ++ " in vars."
+
+lookupSVar :: Show e => IM.IntMap (Unique e, a, b) -> Int -> b
+lookupSVar vars e =
+  case IM.lookup e vars of
+    Just (_, _, s) -> s
     Nothing -> error $ "Could not find " ++ show e ++ " in vars."
 
 data Z3EnvC
@@ -191,7 +200,7 @@ id and strictly ascending.
 -}
 solve :: (MonadIO m, Show e)
   => [Unique e]
-  -> IM.IntMap (LIA' Int (Unique e))
+  -> [(Int, (LIA' Int (Unique e)))]
   -> LIA' Int (Unique e)
   -> m (Maybe [Unique e])
 solve elems symbols lia = liftIO $ evalZ3 $ do

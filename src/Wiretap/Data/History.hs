@@ -36,11 +36,15 @@ simulate :: PartialHistory h
 simulate f a h =
   foldl' (flip f) a (enumerate h)
 
+{-# INLINE simulate #-}
+
 simulateReverse :: PartialHistory h
   => (UE -> a -> a)
   -> a -> h -> a
 simulateReverse f a h =
   foldl' (flip f) a (reverse . enumerate $ h)
+
+{-# INLINE simulateReverse #-}
 
 simulateM :: (PartialHistory h, Monad m)
   => (UE -> m a)
@@ -48,6 +52,8 @@ simulateM :: (PartialHistory h, Monad m)
 simulateM f h =
   zipWith (\u e -> const e <$> u) uniques <$> mapM f uniques
   where uniques = enumerate h
+
+{-# INLINE simulateM #-}
 
 fromEvents :: Foldable t
    => t Event

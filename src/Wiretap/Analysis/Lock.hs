@@ -23,6 +23,8 @@ import           Wiretap.Data.Proof
 import           Wiretap.Utils
 import           Wiretap.Graph
 
+import           Debug.Trace
+
 import qualified Data.List                  as L
 import qualified Data.Map.Strict            as M
 import           Data.Maybe
@@ -130,6 +132,7 @@ nonreentrant :: LockMap -> UE -> Ref -> Bool
 nonreentrant lm e l =
   M.notMember l (lm ! e)
 
+
 data LockEdgeLabel = LockEdgeLabel
   { edgeLock :: Ref
   , edgeAcquire :: UE
@@ -168,7 +171,7 @@ deadlockCandidates'
   -> LockMap
   -> [Deadlock]
 deadlockCandidates' h lockmap =
-  fromCycle <$> cycles'
+  concatMap fromCycle cycles'
   where
     requests =
       L.filter (uncurry $ nonreentrant lockmap) $ onRequests (,) h
@@ -187,14 +190,22 @@ deadlockCandidates' h lockmap =
     toLockItem (r, ref_) =
       ((ref_, threadOf r, (S.fromList (M.keys $ lockmap ! r))), [r])
 
-    fromCycle =
-      Deadlock . S.map toDeadlockEdge
+    fromCycle :: Cycle (Ref, Thread, S.Set Ref) Ref -> [Deadlock]
+    fromCycle cyc = do
+      c <- explode cyc
+      return $ Deadlock (S.fromList c)
 
-    toDeadlockEdge (n, l, n') = fromJust $ do
-      (e:_) <- M.lookup n requestGroups
-      (e':_) <- M.lookup n' requestGroups
-      acq <- M.lookup l $ lockmap ! e
-      return $ DeadlockEdge e (LockEdgeLabel l acq) e'
+    explode :: Cycle (Ref, Thread, S.Set Ref) Ref -> [[DeadlockEdge]]
+    explode [] = []
+    explode cyc@((n, _, _):_) = do
+      e <- fromJust $ M.lookup n requestGroups
+      go e [] cyc
+      where
+        go _ edges [] = [edges]
+        go e edges ((_, l, n'):rest) = do
+          e' <- fromJust $ M.lookup n' requestGroups
+          let acq = fromJust . M.lookup l $ lockmap ! e
+          go e' ( DeadlockEdge e (LockEdgeLabel l acq) e':edges) rest
 
 
 deadlockCandidates :: PartialHistory h

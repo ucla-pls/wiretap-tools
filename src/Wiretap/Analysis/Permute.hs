@@ -2,6 +2,7 @@
 {-# LANGUAGE DeriveFunctor    #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TemplateHaskell  #-}
+{-# LANGUAGE BangPatterns  #-}
 module Wiretap.Analysis.Permute
   ( cdfDirk
   , cdfRVPredict
@@ -35,7 +36,7 @@ import           Control.Monad.Trans.Class (lift)
 
 import qualified Data.List              as L
 import qualified Data.Map               as M
-import qualified Data.IntMap               as IM
+-- import qualified Data.IntMap               as IM
 import qualified Data.Set               as S
 import           Data.Unique
 
@@ -97,12 +98,12 @@ controlFlow
   -> UE
   -> [UE]
 controlFlow h u@(Unique _ e) =
-  snd $ simulateReverse step (S.singleton (thread e), []) priorEvents
-  where
-  priorEvents =
-    takeWhile (/= u) $ enumerate h
+  takeWhile (/= u)
+  . snd
+  $ simulateReverse step (S.singleton (thread e), []) h
 
-  step u'@(Unique _ e') s@(threads, events) =
+  where
+  step u'@(Unique _ e') s@(!threads, events) =
     case operation e' of
       Fork t | t `S.member` threads ->
         (thread e' `S.insert` threads, u':events)
@@ -212,23 +213,26 @@ cdfDirk
   -> UE
   -> [UE]
 cdfDirk h v u =
-  simulateReverse step ([], valuesOf u `joinV` (v `joinV` (S.empty, False))) (controlFlow h u)  ^. _1
+  simulateReverse step ([], valuesOf u `joinV` (v `joinV` Just S.empty)) (controlFlow h u)  ^. _1
   where
-    step u'@(Unique _ e') (events, vs@(refs, branch)) =
+    step u'@(Unique _ e') (!events, !vs) =
       let events' =
-            case operation e' of
-              Read _ _ | branch ->
+            case (operation e', vs)  of
+              (Read _ _ , Nothing) ->
                 u':events
-              Read _ (Object v') | Ref v' `S.member` refs  ->
+              (Read _ (Object v'), Just refs) | Ref v' `S.member` refs  ->
                 u':events
-              Acquire _ ->
+              (Acquire _, _) ->
                 u':events
               _ ->
                 events
       in (events', valuesOf u' `joinV` vs)
 
-    joinV (ValueSet r1 vs b) (r2, b2) =
-      (r1 `S.union` r2, vs || b || b2)
+    joinV _ Nothing = Nothing
+    joinV (ValueSet r1 vs b) (Just r2) =
+      if vs || b then Nothing else Just (r1 `S.union` r2)
+
+    {-# INLINE joinV #-}
 
 cdfRefsOnly
   :: PartialHistory h
@@ -439,11 +443,10 @@ generateVars
   => LockMap
   -> (h -> CDF)
   -> h
-  -> IM.IntMap (LIA' Int UE)
+  -> [(Int, (LIA' Int UE))]
 generateVars lm f h =
-  IM.fromList $
-    onReads (\r x -> (idx r, phiRead lm writes (f h) r x)) h
-    ++ (onNonReentrantAcquires lm (\a l -> (idx a, phiAcq lm lpwr (f h) a l)) h)
+  onReads (\r x -> (idx r, phiRead lm writes (f h) r x)) h
+  ++ onNonReentrantAcquires lm (\a l -> (idx a, phiAcq lm lpwr (f h) a l)) h
   where
     lpwr = lockPairsWithRef h
     writes = mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
@@ -478,8 +481,7 @@ permuteBatch
   -> h
   -> m (a -> EitherT (LIA UE) m (Proof a))
 permuteBatch (lm,cdf) h = do
-  let vars = generateVars lm cdf h
-  solver <- setupLIA (enumerate h) vars
+  solver <- setupLIA (enumerate h) $ generateVars lm cdf h
   return $ \a -> do
     let es = candidateSet a
         x = And $ phiExecE lm (cdf h) es : ([ sc, mhb] <*> [h])

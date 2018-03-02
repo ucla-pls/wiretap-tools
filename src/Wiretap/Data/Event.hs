@@ -232,24 +232,24 @@ instance Arbitrary Value where
     ]
 
 data Operation
-  = Synch Int
+  = Synch !Int
 
-  | Fork Thread
-  | Join Thread
+  | Fork !Thread
+  | Join !Thread
 
-  | Request Ref
-  | Acquire Ref
-  | Release Ref
+  | Request !Ref
+  | Acquire !Ref
+  | Release !Ref
 
   | Begin
   | End
 
   | Branch
 
-  | Enter Ref Program.Method
+  | Enter !Ref !Program.Method
 
-  | Read Location Value
-  | Write Location Value
+  | Read !Location !Value
+  | Write !Location !Value
 
 
   deriving (Show, Eq, Ord)

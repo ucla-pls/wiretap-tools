@@ -9,7 +9,7 @@ import Data.PartialOrder
 {-| Takes elements and make them unique by assigning an identifier -}
 data Unique e = Unique
  { idx    :: !Int
- , normal :: e
+ , normal :: !e
  } deriving (Show)
 
 instance PartialOrder e => PartialOrder (Unique e) where
@@ -23,7 +23,8 @@ instance Functor Unique where
   fmap f (Unique i e) = Unique i (f e)
 
 instance Eq (Unique e) where
-  (==) = (==) `on` idx
+ (==) (Unique a _ ) (Unique b _) = a == b
+
 
 instance Ord (Unique e) where
   compare = compare `on` idx

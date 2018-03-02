@@ -21,9 +21,9 @@ import Data.Maybe
 import Data.Unique
 import Wiretap.Utils
 
-import qualified Data.Set as S
+-- import qualified Data.Set as S
 
-type Cycle a b = S.Set (a, b, a)
+type Cycle a b = [(a, b, a)]
 
 cyclesFrom :: (G.Graph gr, Ord a, Ord b) => gr a b -> G.Node -> [Cycle G.Node b]
 cyclesFrom gr = go []
@@ -31,7 +31,7 @@ cyclesFrom gr = go []
     go path x =
       case dropWhileEnd (\(n, _, _) -> n /= x) path of
         [] -> concatMap (followEdge path x) $ G.lsuc gr x
-        cycl -> [S.fromList cycl]
+        cycl -> [cycl]
 
     followEdge path x (n, l) =
       let edge = (x, l, n) in
@@ -56,7 +56,7 @@ cycles
   -> (a -> a -> Maybe b)
   -> [Cycle a b]
 cycles elems f =
-  S.map (fromEdge) <$> cycles' graph
+  map fromEdge <$> cycles' graph
   where
     fromEdge (n, l, n') = (fromNode n, l, fromNode n')
 

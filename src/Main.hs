@@ -158,7 +158,7 @@ readConfig args = do
   return $ Config
     { verbose = isPresent args $ longOption "verbose"
     , filters = splitOn ','
-        $ getArgWithDefault args "unique,ignored,mhb,lockset" (longOption "filter")
+        $ getArgWithDefault args "unique,mhb,lockset" (longOption "filter")
     , prover = getArgWithDefault args "dirk" (longOption "prover")
     , outputProof = getLongOption "proof"
     , program = getLongOption "program"
@@ -480,11 +480,14 @@ proveCandidates config p generator toString events = do
         "reject" ->
           left . return $ "Rejected"
         "unique" -> do
-          str <- liftIO $ toString c
-          alreadyProven <- lift $ gets (S.member str . proven)
-          if alreadyProven
-            then left . return $ "Already proven"
-            else return ()
+          ss <- lift $ gets proven
+          if S.null ss
+            then return ()
+            else do
+              str <- liftIO $ toString c
+              if S.member str ss
+                then left . return $ "Already proven"
+                else return ()
         _ ->
           error $ "Unknown filter " ++ name
 
