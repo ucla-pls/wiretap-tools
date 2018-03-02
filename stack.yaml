@@ -3,3 +3,5 @@ extra-deps:
   - pipes-binary-0.4.1
   - ../z3-haskell
   - pipes-4.1.9
+  - fgl-visualize-0.1.0.1
+  - dotgen-0.4.2

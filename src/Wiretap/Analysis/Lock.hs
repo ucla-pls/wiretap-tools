@@ -29,6 +29,8 @@ import           Data.Maybe
 import           Data.Unique
 import qualified Data.Set   as S
 
+-- import Debug.Trace
+
 
 import           Control.Lens               (over, _1)
 import           Control.Monad
@@ -160,23 +162,39 @@ edge' lockmap (req', l) b = do
   guard $ l /= snd b;
   edge lockmap req' b
 
-
 deadlockCandidates'
   :: PartialHistory h
   => h
   -> LockMap
   -> [Deadlock]
 deadlockCandidates' h lockmap =
-  fromCycle <$> cycles requests (edge' lockmap)
+  fromCycle <$> cycles'
   where
     requests =
       L.filter (uncurry $ nonreentrant lockmap) $ onRequests (,) h
 
+    cycles' =
+      cycles (M.keys requestGroups) $ \(r1, t1, ls) (r2, t2, _) -> do
+        guard $ r1 /= r2
+        guard $ t1 /= t2
+        guard $ r2 `S.member` ls
+        return r2
+
+    requestGroups :: M.Map (Ref, Thread, S.Set Ref) [UE]
+    requestGroups =
+      M.fromListWith (++) $ map toLockItem requests
+
+    toLockItem (r, ref_) =
+      ((ref_, threadOf r, (S.fromList (M.keys $ lockmap ! r))), [r])
+
     fromCycle =
       Deadlock . S.map toDeadlockEdge
 
-    toDeadlockEdge ((n,_), l, (n', _)) =
-      DeadlockEdge n l n'
+    toDeadlockEdge (n, l, n') = fromJust $ do
+      (e:_) <- M.lookup n requestGroups
+      (e':_) <- M.lookup n' requestGroups
+      acq <- M.lookup l $ lockmap ! e
+      return $ DeadlockEdge e (LockEdgeLabel l acq) e'
 
 
 deadlockCandidates :: PartialHistory h

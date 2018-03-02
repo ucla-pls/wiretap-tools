@@ -28,22 +28,24 @@ dependencies:
 - vector
 - z3 >= 4.1.0
 - fgl >= 5.5.3.1
+- fgl-visualize
 
 executable:
   main: Main.hs
   source-dirs: src
   ghc-options:
-    -O2
+    -O3
     -threaded
     -Wall
+    -funbox-strict-fields
 
-      # benchmarks:
-      #   wt-prof:
-      #     main: Main.hs
-      #     source-dirs: src
-      #     ghc-options:
-      #       -O3
-      #       -threaded
-      #       -fprof-auto
-      #       -funbox-strict-fields
-      #       -Wall
+benchmarks:
+  wt-prof:
+    main: Main.hs
+    source-dirs: src
+    ghc-options:
+      -O3
+      -threaded
+      -fprof-auto
+      -funbox-strict-fields
+      -rtsopts

@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 3388fe33a1f4d7da0100b770f7c9b3aedb5dfa9c130b170530e5251c3bac004f
+-- hash: a46d10afeb45470c90d03aba5cd9253464359b8a683b9e432fe93a030f1a30f9
 
 name:           wiretap-tools
 version:        0.1.0.0
@@ -19,7 +19,7 @@ executable wiretap-tools
   main-is: Main.hs
   hs-source-dirs:
       src
-  ghc-options: -O2 -threaded -Wall
+  ghc-options: -O3 -threaded -Wall -funbox-strict-fields
   build-depends:
       QuickCheck >=2.8
     , base >=4.9 && <4.10
@@ -30,6 +30,61 @@ executable wiretap-tools
     , docopt
     , either >=4.4.1.1
     , fgl >=5.5.3.1
+    , fgl-visualize
+    , filepath >=1.4.1.0
+    , lens >=4.14
+    , mtl >=2.2.1
+    , pipes
+    , pipes-binary >=0.4.1
+    , pipes-bytestring
+    , pipes-parse >=3.0.7
+    , transformers >=0.5.2.0
+    , vector
+    , z3 >=4.1.0
+  other-modules:
+      Data.PartialOrder
+      Data.Stream
+      Data.Unique
+      Pipes.Missing
+      Wiretap.Analysis
+      Wiretap.Analysis.Count
+      Wiretap.Analysis.DataRace
+      Wiretap.Analysis.Group
+      Wiretap.Analysis.LIA
+      Wiretap.Analysis.Linearize
+      Wiretap.Analysis.Lock
+      Wiretap.Analysis.MustHappenBefore
+      Wiretap.Analysis.Permute
+      Wiretap.Data.Event
+      Wiretap.Data.History
+      Wiretap.Data.Log
+      Wiretap.Data.MiniParser
+      Wiretap.Data.Program
+      Wiretap.Data.Proof
+      Wiretap.Format.Binary
+      Wiretap.Format.Text
+      Wiretap.Graph
+      Wiretap.Utils
+      Paths_wiretap_tools
+  default-language: Haskell2010
+
+benchmark wt-prof
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs:
+      src
+  ghc-options: -O3 -threaded -fprof-auto -funbox-strict-fields -rtsopts
+  build-depends:
+      QuickCheck >=2.8
+    , base >=4.9 && <4.10
+    , binary
+    , bytestring >=0.10.8.1
+    , containers >=0.5.7.1
+    , directory >=1.2.6.2
+    , docopt
+    , either >=4.4.1.1
+    , fgl >=5.5.3.1
+    , fgl-visualize
     , filepath >=1.4.1.0
     , lens >=4.14
     , mtl >=2.2.1

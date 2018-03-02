@@ -153,6 +153,8 @@ readConfig args = do
     Nothing ->
       return $ S.empty
 
+  let chunk_size = read <$> getLongOption "chunk-size"
+
   return $ Config
     { verbose = isPresent args $ longOption "verbose"
     , filters = splitOn ','
@@ -161,8 +163,9 @@ readConfig args = do
     , outputProof = getLongOption "proof"
     , program = getLongOption "program"
     , history = getArgument "history"
-    , chunkSize = read <$> getLongOption "chunk-size"
-    , chunkOffset = fromMaybe 1 (read <$> getLongOption "chunk-offset")
+    , chunkSize = chunk_size
+    , chunkOffset = fromMaybe (fromMaybe 1 $ (flip div 2) <$> chunk_size)
+         (read <$> getLongOption "chunk-offset")
     , humanReadable = args `isPresent` longOption "human-readable"
     , ignoreSet = ignoreSet'
     }
@@ -279,7 +282,8 @@ proveCandidates
   -> (a -> IO String)
   -> Producer Event m ()
   -> m ()
-proveCandidates config p generator toString events =
+proveCandidates config p generator toString events = do
+  liftIO . dbg $ "Filters: " ++ show (filters config)
   runEffect $ uniqueEvents >-> PL.evalStateP initialState proverPipe
 
   where
@@ -287,6 +291,9 @@ proveCandidates config p generator toString events =
       (ProverState S.empty (fromUniques []) M.empty mhbEmpty)
 
     logV = hPutStrLn stderr
+
+    dbg :: String -> IO ()
+    dbg = when (verbose config) . logV
 
     uniqueEvents =
        PM.finite' (events >-> PM.scan' (\i e -> (i+1, Unique i e)) 0)
@@ -324,7 +331,7 @@ proveCandidates config p generator toString events =
           yield chunk
           if actualChunkSize < size
             then
-              liftIO . when (verbose config) $ logV "Done"
+              liftIO . dbg $ "Done"
             else do
               new <- getN offset
               let (dropped, remainder) = splitAt offset chunk
@@ -346,19 +353,21 @@ proveCandidates config p generator toString events =
           foreachCandidate chunk $ \c -> do
             result <- runEitherT $ mapM ($ c) $ map getFilter (filters config)
             case result of
-              Left msg -> liftIO $ do
-                when (verbose config) $ do
-                  hPutStrLn stderr "Could not prove candidate:"
-                  hPutStr stderr "  " >> toString c >>= hPutStrLn stderr
-                  hPutStrLn stderr "The reason was:"
-                  msg' <- msg
-                  hPutStr stderr "  " >> hPutStrLn stderr msg'
+              Left msg -> liftIO $ handleError c msg
               Right _ -> do
                 str <- liftIO . toString $ c
                 modify $ addProven str
                 liftIO . putStrLn $ str
         Just cdf ->
           evalZ3T (solveChunk lm cdf chunk)
+
+    handleError c msg =
+      when (verbose config) $ do
+        hPutStrLn stderr "Could not prove candidate:"
+        hPutStr stderr "  " >> toString c >>= hPutStrLn stderr
+        hPutStrLn stderr "The reason was:"
+        msg' <- msg
+        hPutStr stderr "  " >> hPutStrLn stderr msg'
 
     foreachCandidate
       :: (PartialHistory h, MonadState ProverState m')
@@ -383,18 +392,14 @@ proveCandidates config p generator toString events =
             solver <- case msolver of
               Just solver -> return $ solver
               Nothing -> do
+                liftIO $ dbg "Computing initial solver:"
                 solver <- lift $ permuteBatch (lm, cfd) chunk
                 liftIO $ writeIORef r (Just solver)
+                liftIO $ dbg  "done."
                 return $ solver
             first (onProverError chunk c) $ solver c
         case result of
-          Left msg -> liftIO $ do
-            when (verbose config) $ do
-              hPutStrLn stderr "Could not prove candidate:"
-              hPutStr stderr "  " >> toString c >>= hPutStrLn stderr
-              hPutStrLn stderr "The reason was:"
-              msg' <- msg
-              hPutStr stderr "  " >> hPutStrLn stderr msg'
+          Left msg -> liftIO $ handleError c msg
           Right proof -> do
             str <- liftIO . toString $ candidate proof
             lift . modify $ addProven str

@@ -7,9 +7,14 @@ module Wiretap.Graph
 
 -- Graph analysis tools
 
+-- import Debug.Trace
+
+-- import System.IO.Unsafe
+
 import qualified Data.Graph.Inductive.Graph as G
+-- import qualified Data.Graph.Inductive.Dot as G
 import qualified Data.Graph.Inductive.PatriciaTree as GP
-import Data.Graph.Inductive.Query.DFS (dff')
+import Data.Graph.Inductive.Query.DFS
 import Data.Tree
 import Data.List
 import Data.Maybe
@@ -34,19 +39,24 @@ cyclesFrom gr = go []
 
     -- cleanPath = reverse . map (\(x,_,_) -> x)
 
-cycles' :: (G.Graph gr, Ord a, Ord b) => gr a b -> [Cycle G.Node b]
+cycles' :: (G.DynGraph gr, Show (gr a b), Ord a, Ord b) => gr a b -> [Cycle G.Node b]
 cycles' gr =
+  -- concatMap nodesToCycles . traceShowId $ scc gr
+  -- where
+  --   nodesToCycles (n:nds) =
+  --     let gr' = G.subgraph (n:nds) gr in
+  --     cyclesFrom gr' n
   concatMap (cyclesFrom gr . rootLabel) $ forest
   where forest = dff' gr
 
 
 cycles
-  :: forall a b. (Ord a , Ord b)
+  :: forall a b. (Ord a , Ord b, Show b, Show a)
   => [a]
   -> (a -> a -> Maybe b)
   -> [Cycle a b]
 cycles elems f =
-  S.map fromEdge <$> cycles' graph
+  S.map (fromEdge) <$> cycles' graph
   where
     fromEdge (n, l, n') = (fromNode n, l, fromNode n')
 
