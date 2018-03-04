@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: a46d10afeb45470c90d03aba5cd9253464359b8a683b9e432fe93a030f1a30f9
+-- hash: 5b5857f20391ef638c45af87c29e69c3b57968be2c0801ff82898869676ab5b3
 
 name:           wiretap-tools
 version:        0.1.0.0
@@ -30,7 +30,6 @@ executable wiretap-tools
     , docopt
     , either >=4.4.1.1
     , fgl >=5.5.3.1
-    , fgl-visualize
     , filepath >=1.4.1.0
     , lens >=4.14
     , mtl >=2.2.1
@@ -84,7 +83,6 @@ benchmark wt-prof
     , docopt
     , either >=4.4.1.1
     , fgl >=5.5.3.1
-    , fgl-visualize
     , filepath >=1.4.1.0
     , lens >=4.14
     , mtl >=2.2.1
