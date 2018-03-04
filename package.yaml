@@ -27,7 +27,7 @@ dependencies:
 - transformers >= 0.5.2.0
 - vector
 - z3 >= 4.1.0
-- fgl >= 5.5.3.1
+- fgl
 
 executable:
   main: Main.hs
