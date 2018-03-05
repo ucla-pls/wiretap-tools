@@ -6,7 +6,9 @@ license-file:        LICENSE
 author:              Christian Gram Kalhauge
 maintainer:          kalhauge@cs.ucle.edu
 category:            Language
-extra-source-files:  ChangeLog.md, README.mkd
+extra-source-files:  
+  - ChangeLog.md
+  - README.mkd
 
 dependencies:
 - QuickCheck >= 2.8
@@ -28,6 +30,7 @@ dependencies:
 - vector
 - z3 >= 4.1.0
 - fgl
+- exceptions
 
 executable:
   main: Main.hs

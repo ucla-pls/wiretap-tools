@@ -16,6 +16,7 @@ module Wiretap.Analysis.Permute
 
   , permute
   , permuteBatch
+  , permuteBatch'
 
   , Candidate(..)
   , Proof(..)
@@ -58,9 +59,18 @@ import           Wiretap.Utils
 
 -- import           Debug.Trace
 
+onlyNessary :: UE -> Bool
+onlyNessary (Unique _ es) =
+  case operation es of
+    Enter _ _ -> False
+    Branch -> False
+    _ -> True
+
 sc :: PartialHistory h => h -> LIA UE
 sc h =
-  And [ totalOrder es | es <- M.elems $ byThread h ]
+  And [ totalOrder $ filter onlyNessary es
+      | es <- M.elems $ byThread h
+      ]
 
 mhb :: PartialHistory h => h -> LIA UE
 mhb h =
@@ -487,6 +497,25 @@ permuteBatch (lm,cdf) h = do
         x = And $ phiExecE lm (cdf h) es : ([ sc, mhb] <*> [h])
     result <- lift $ solver x
     maybe (left x) (right . Proof a x . prefixContaining es) result
+
+permuteBatch'
+  :: (PartialHistory h, MonadZ3 m, Candidate a)
+  => (LockMap, (h -> CDF))
+  -> h
+  -> m (a -> EitherT (LIA UE) m (Proof a))
+permuteBatch' (lm,cdf) h = do
+  solver <-
+    setupLIA'
+      (filter onlyNessary $ enumerate h)
+      (generateVars lm cdf h)
+      (And [sc h, mhb h])
+  return $ \a -> do
+    let es = candidateSet a
+        x = (phiExecE lm (cdf h) es)
+    b <- lift $ solver x
+    if b
+    then return $ Proof a x undefined
+    else left $ x
 
 equate :: CandidateSet -> LIA UE
 equate es =

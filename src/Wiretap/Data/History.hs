@@ -114,6 +114,8 @@ onEvent
 onEvent g f =
   simulateReverse (\u -> maybe id ((:) . f u) . g . operation . normal $ u) []
 
+{-# INLINE onEvent #-}
+
 onReads
   :: PartialHistory h
   => (UE -> (Location, Value) -> a)
@@ -122,6 +124,8 @@ onReads
 onReads = onEvent filter'
   where filter' (Read l v) = Just (l, v)
         filter' _          = Nothing
+
+{-# INLINE onReads #-}
 
 onWrites
   :: PartialHistory h
@@ -132,6 +136,8 @@ onWrites = onEvent filter'
   where filter' (Write l v) = Just (l, v)
         filter' _           = Nothing
 
+{-# INLINE onWrites #-}
+
 onAcquires
   :: PartialHistory h
   => (UE -> Ref -> a)
@@ -141,6 +147,8 @@ onAcquires = onEvent filter'
   where filter' (Acquire r) = Just r
         filter' _           = Nothing
 
+{-# INLINE onAcquires #-}
+
 onRequests
   :: PartialHistory h
   => (UE -> Ref -> a)
@@ -149,3 +157,5 @@ onRequests
 onRequests = onEvent filter'
   where filter' (Request r) = Just r
         filter' _           = Nothing
+
+{-# INLINE onRequests #-}

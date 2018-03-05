@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -11,13 +12,19 @@ module Wiretap.Analysis.LIA
   , pairwise
   , orders
   , totalOrder
+
   , evalZ3T
+  , evalZ3TWithTimeout
+  , fast
   , Z3T
+
+  , LIAError (..)
 
   , toCNF
   , solve
   , toZ3
   , setupLIA
+  , setupLIA'
 
   , liaSize
   )
@@ -29,15 +36,17 @@ import qualified Data.IntMap.Strict as IM
 import qualified Data.List as L
 
 import Control.Monad.IO.Class
-import Control.Monad.Trans.Reader hiding (local)
-import Control.Monad.Trans
+import Control.Monad.Trans.Reader (ReaderT)
+import Control.Monad.Reader hiding (local)
+-- import Control.Monad.Trans
 import Control.Monad.State.Class
+import Control.Monad.Catch
 
-import Control.Monad.Fix
+--import Control.Monad.Fix
 import Data.Unique
 
-import Data.Traversable
-import Data.Foldable hiding (product)
+--import Data.Traversable
+--import Data.Foldable hiding (product)
 -- import Data.Void
 
 -- import Debug.Trace
@@ -107,6 +116,10 @@ product :: (a -> b -> c) -> [a] -> [b] -> [c]
 product f as bs =
   [ f a b | a <- as, b <- bs ]
 
+data LIAError
+  = LIAZ3Error Z3Error
+  | LIACouldNotSolveConstraints
+  deriving (Show)
 
 {-| `setup`, takes a vector of elements and a list of symbols and setup the
 environment.
@@ -129,16 +142,46 @@ setupLIA elems vars = do
     let s = lookupSVar eVars var
     assert =<< mkImplies s =<< solver constraint
 
-  return $ \ lia -> local $ do
-    assert =<< solver lia
-    (_, solution) <- withModel $ \m -> do
-      solutions <- mapM (\(_, o, _) -> evalInt m o) eVars
-      return solutions
-    case solution of
-      Just assignment -> do
-        return . Just $ L.sortOn (\e -> assignment IM.! idx e) elems
-      Nothing ->
-        return Nothing
+  let outer lia = local $ do
+        assert =<< solver lia
+        (_, solution) <- withModel $ \m -> do
+          solutions <- mapM (\(_, o, _) -> evalInt m o) eVars
+          return solutions
+        case solution of
+          Just assignment -> do
+            return . Just $ L.sortOn (\e -> assignment IM.! idx e) elems
+          Nothing ->
+            return Nothing
+
+  return outer
+
+setupLIA'
+  :: (MonadZ3 m, Show e)
+  => [Unique e]
+  -> [(Int, (LIA' Int (Unique e)))]
+  -> LIA' Int (Unique e)
+  -> m (LIA' Int (Unique e) -> m Bool)
+setupLIA' elems vars base = do
+  eVars <-
+    fmap IM.fromDistinctAscList . forM elems $ \e -> do
+      o <- mkFreshIntVar "O"
+      s <- mkFreshBoolVar "S"
+      return (idx e,(e,o,s))
+
+  let solver = toZ3 (lookupOVar eVars) (lookupSVar eVars)
+
+  assert =<< solver base
+
+  forM_ vars $ \(var, constraint) -> do
+    let s = lookupSVar eVars var
+    assert =<< mkImplies s =<< solver constraint
+
+  let outer lia = local $ do
+            assert =<< solver lia
+            rest <- check
+            return $ rest == Sat
+
+  return outer
 
 lookupOVar :: Show e => IM.IntMap (Unique e, a, b) -> Unique e -> a
 lookupOVar vars e =
@@ -172,24 +215,50 @@ newEnvC = newEnvWithC Base.mkContext
 
 newtype Z3T m a = Z3T
   { _unZ3 :: ReaderT Z3EnvC m a
-  } deriving (Functor, Applicative, Monad, MonadIO, MonadTrans, MonadFix)
+  } deriving (Applicative, Monad, MonadIO, MonadTrans, MonadFix, MonadReader Z3EnvC)
+
+instance Functor m => Functor (Z3T m) where
+  fmap f (Z3T fa) = Z3T (fmap f $ fa)
+  {-# INLINE fmap #-}
 
 instance (MonadState s m) => MonadState s (Z3T m) where
   get = lift get
+  {-# INLINE get #-}
   put = lift . put
+  {-# INLINE put #-}
   state = lift . state
+  {-# INLINE state #-}
 
 instance (MonadIO m) => MonadZ3 (Z3T m) where
   getSolver = Z3T $ asks envSolver
   getContext = Z3T $ asks envContext
 
+fast ::
+     (MonadIO m)
+  => Z3T IO a
+  -> Z3T m a
+fast (Z3T z) = do
+  env <- ask
+  liftIO $ runReaderT z env
+
+evalZ3TWithTimeout
+  :: (MonadIO m, MonadCatch m)
+  => Integer
+  -> Z3T m a
+  -> m (Either Z3Error a)
+evalZ3TWithTimeout timeout (Z3T s) = do
+  let opts = stdOpts +? if timeout > 0
+        then (opt "timeout" timeout)
+        else mempty
+  env <- liftIO $ newEnvC Nothing opts
+  (Right <$> runReaderT s env) `catch` (return . Left)
+
 evalZ3T
-  :: (MonadIO m)
+  :: (MonadIO m, MonadCatch m)
   => Z3T m a
-  -> m a
-evalZ3T (Z3T s) = do
-  env <- liftIO $ newEnvC Nothing stdOpts
-  runReaderT s env
+  -> m (Either Z3Error a)
+evalZ3T =
+  evalZ3TWithTimeout 0
 
 
 {-| solve takes a vector of elements and logic constraints
@@ -207,24 +276,33 @@ solve elems symbols lia = liftIO $ evalZ3 $ do
   f <- setupLIA elems symbols
   f lia
 
+toZ3' ::
+  (e -> AST)
+  -> (s -> AST)
+  -> Base.Context
+  -> LIA' s e -> IO AST
+toZ3' evar svar x = go
+  where
+  go lia =
+    case lia of
+      And [] ->
+        Base.mkTrue x
+      And cs ->
+        Base.mkAnd x =<< mapM go cs
+      Or cs ->
+        Base.mkOr x =<< mapM go cs
+      Order a b ->
+        Base.mkLt x (evar a) (evar b)
+      Eq a b ->
+        Base.mkEq x (evar a) (evar b)
+      Var s ->
+        return $ svar s
+
 toZ3 :: MonadZ3 m
   => (e -> AST)
   -> (s -> AST)
   -> LIA' s e
   -> m AST
-toZ3 evar svar = go
-  where
-    go lia =
-      case lia of
-        And [] ->
-          mkTrue
-        And cs ->
-          mkAnd =<< mapM go cs
-        Or cs ->
-          mkOr =<< mapM go cs
-        Order a b ->
-          mkLt (evar a) (evar b)
-        Eq a b ->
-          mkEq (evar a) (evar b)
-        Var s ->
-          return $ svar s
+toZ3 evar svar lia = do
+  c <- getContext
+  liftIO $ toZ3' evar svar c lia

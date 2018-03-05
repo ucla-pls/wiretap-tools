@@ -18,6 +18,7 @@ import           System.IO
 import           Control.Applicative
 import           Control.Lens                     (over, _2)
 import           Control.Monad
+import           Control.Monad.Catch
 import           Control.Monad.Trans.Either
 import           Control.Monad.Trans.State.Strict (StateT)
 import           Control.Monad.State.Class
@@ -87,7 +88,10 @@ Options:
                                maximal offset, which touches all events is the
                                size.
 
---ignore IGNORED_FILE         A file containing candidates to ignore.
+--solve-time SOLVE_TIME        The time the solver can use before it is timed out
+                               (default: 0).
+
+--ignore IGNORED_FILE          A file containing candidates to ignore.
 
 -v, --verbose                  Produce verbose outputs
 
@@ -126,6 +130,7 @@ data Config = Config
   , ignoreSet     :: S.Set String
   , chunkSize     :: Maybe Int
   , chunkOffset   :: Int
+  , solveTime    :: Integer
   } deriving (Show, Read)
 
 getArgOrExit :: Arguments -> Option -> IO String
@@ -158,7 +163,7 @@ readConfig args = do
   return $ Config
     { verbose = isPresent args $ longOption "verbose"
     , filters = splitOn ','
-        $ getArgWithDefault args "unique,mhb,lockset" (longOption "filter")
+        $ getArgWithDefault args "mhb,lockset,unique" (longOption "filter")
     , prover = getArgWithDefault args "dirk" (longOption "prover")
     , outputProof = getLongOption "proof"
     , program = getLongOption "program"
@@ -168,6 +173,7 @@ readConfig args = do
          (read <$> getLongOption "chunk-offset")
     , humanReadable = args `isPresent` longOption "human-readable"
     , ignoreSet = ignoreSet'
+    , solveTime = read $ getArgWithDefault args "0" (longOption "solve-time")
     }
   where
     getLongOption = getArg args . longOption
@@ -275,7 +281,7 @@ stateFromChunck h p =
 type ProverT m = StateT ProverState m
 
 proveCandidates
-  :: forall a m. (Candidate a, Show a, Ord a, MonadIO m)
+  :: forall a m. (Candidate a, Show a, Ord a, MonadIO m, MonadCatch m)
   => Config
   -> Program.Program
   -> (forall h m'. (PartialHistory h, MonadState ProverState m') => h -> Producer a m' ())
@@ -317,6 +323,7 @@ proveCandidates config p generator toString events = do
 
         go size chunk = do
           !ls <- lift $ gets lockState
+          liftIO . logV $ case chunk of a:_ -> "At event " ++ show (idx a); _ -> []
           liftIO . when (verbose config) $
             case chunk of
                 a:_ -> do
@@ -358,8 +365,13 @@ proveCandidates config p generator toString events = do
                 str <- liftIO . toString $ c
                 modify $ addProven str
                 liftIO . putStrLn $ str
-        Just cdf ->
-          evalZ3T (solveChunk lm cdf chunk)
+        Just cdf -> do
+          e <- evalZ3TWithTimeout (solveTime config) (solveChunk lm cdf chunk)
+          case e of
+            Right x ->
+              return x
+            Left msg ->
+              liftIO . logV $ show msg
 
     handleError c msg =
       when (verbose config) $ do
@@ -386,16 +398,18 @@ proveCandidates config p generator toString events = do
     solveChunk lm cfd chunk = do
       r <- liftIO $ newIORef Nothing
       foreachCandidate chunk $ \c -> do
-        result <- runEitherT $ do
-            mapM_ ($ c) $ map getFilter (filters config)
-            msolver <- liftIO $ readIORef r
+        r' <- lift $ runEitherT (mapM_ ($ c) $ map getFilter (filters config))
+        result <- fast $ runEitherT $ do
+            hoistEither r'
+            msolver <- lift . lift $ readIORef r
             solver <- case msolver of
               Just solver -> return $ solver
               Nothing -> do
-                liftIO $ dbg "Computing initial solver:"
-                solver <- lift $ permuteBatch (lm, cfd) chunk
+                -- liftIO . logV $ "Computing initial solver"
+                liftIO $ logV "Computing initial solver:"
+                solver <- lift $ permuteBatch' (lm, cfd) chunk
                 liftIO $ writeIORef r (Just solver)
-                liftIO $ dbg  "done."
+                liftIO $ logV  "done."
                 return $ solver
             first (onProverError chunk c) $ solver c
         case result of
@@ -406,7 +420,6 @@ proveCandidates config p generator toString events = do
             liftIO $ do
               putStrLn $ str
               printProof proof
-
 
     onProverError
       :: (PartialHistory h)
@@ -477,8 +490,10 @@ proveCandidates config p generator toString events = do
           if S.member str (ignoreSet config)
             then left . return $ "In ignore set"
             else return ()
+
         "reject" ->
           left . return $ "Rejected"
+
         "unique" -> do
           ss <- lift $ gets proven
           if S.null ss

@@ -23,7 +23,7 @@ import           Wiretap.Data.Proof
 import           Wiretap.Utils
 import           Wiretap.Graph
 
-import           Debug.Trace
+-- import           Debug.Trace
 
 import qualified Data.List                  as L
 import qualified Data.Map.Strict            as M
@@ -154,16 +154,16 @@ instance Candidate Deadlock where
   candidateSet =
     S.map edgeFrom . deadlockCycle
 
-edge :: LockMap -> UE -> (UE, Ref) -> Maybe LockEdgeLabel
-edge lockmap e (req, l) = do
-  guard $ threadOf e /= threadOf req
-  acq <- M.lookup l $ lockmap ! e
-  return $ LockEdgeLabel l acq
+-- edge :: LockMap -> UE -> (UE, Ref) -> Maybe LockEdgeLabel
+-- edge lockmap e (req, l) = do
+--   guard $ threadOf e /= threadOf req
+--   acq <- M.lookup l $ lockmap ! e
+--   return $ LockEdgeLabel l acq
 
-edge' :: LockMap -> (UE, Ref) -> (UE, Ref) -> Maybe LockEdgeLabel
-edge' lockmap (req', l) b = do
-  guard $ l /= snd b;
-  edge lockmap req' b
+-- edge' :: LockMap -> (UE, Ref) -> (UE, Ref) -> Maybe LockEdgeLabel
+-- edge' lockmap (req', l) b = do
+--   guard $ l /= snd b;
+--   edge lockmap req' b
 
 deadlockCandidates'
   :: PartialHistory h

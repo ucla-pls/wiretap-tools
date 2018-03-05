@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 7bed8f38b88b4fa5a8e05734344ebf70b72596777ccb8c7fc7451661cc64ef3a
+-- hash: 85f998947eb15dea09e5fe6aa328e62e6ceee17dab998786b029195e6a2485ce
 
 name:           wiretap-tools
 version:        0.1.0.0
@@ -14,6 +14,10 @@ license:        GPL-3
 license-file:   LICENSE
 build-type:     Simple
 cabal-version:  >= 1.10
+
+extra-source-files:
+    ChangeLog.md
+    README.mkd
 
 executable wiretap-tools
   main-is: Main.hs
@@ -29,6 +33,7 @@ executable wiretap-tools
     , directory >=1.2.6.2
     , docopt
     , either >=4.4.1.1
+    , exceptions
     , fgl
     , filepath >=1.4.1.0
     , lens >=4.14
@@ -82,6 +87,7 @@ benchmark wt-prof
     , directory >=1.2.6.2
     , docopt
     , either >=4.4.1.1
+    , exceptions
     , fgl
     , filepath >=1.4.1.0
     , lens >=4.14
