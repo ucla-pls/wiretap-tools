@@ -32,6 +32,18 @@ makeLenses ''MHBEvents
 mhbEmpty :: MHB
 mhbEmpty = MHB mempty mempty mempty
 
+mhbForkOf :: MHB -> UE -> Maybe UE
+mhbForkOf mh ue =
+  case _mhbForks $ _mhbEvents mh Map.! threadOf ue of
+    e:[] -> Just e
+    _ -> Nothing
+
+mhbEndOf :: MHB -> Thread -> Maybe UE
+mhbEndOf mh t =
+  case _mhbEnds $ _mhbEvents mh Map.! t of
+    e:[] -> Just e
+    _ -> Nothing
+
 mhb' :: MHBGraph -> Event -> Event -> Bool
 mhb' m e1 e2 =
   maybe False id $ do

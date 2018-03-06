@@ -38,6 +38,7 @@ import qualified Data.Map                          as M
 import qualified Data.Set                          as S
 import           Data.Unique
 import           Data.Monoid
+-- import           Debug.Trace
 
 import           Wiretap.Analysis.LIA
 import           Wiretap.Analysis.Lock
@@ -149,19 +150,20 @@ valuesOf (Unique _ e) =
 
 lockPairsWithRef
   :: PartialHistory h
-  => h
+  => LockMap
+  -> h
   -> M.Map Ref ([UE], [(UE, UE)], [UE])
-lockPairsWithRef h =
+lockPairsWithRef lm h =
   M.map (simulateReverse pairer ([], [], [])) locksWithRef
   where
     pairer u@(Unique _ e) s@(dr, pairs, da)=
       case operation e of
-        Acquire _ ->
+        Acquire l | nonreentrant lm u l ->
           case dr of
             []    -> (dr, pairs, u:da)
             [r]   -> ([], (u, r):pairs, da)
             _:dr' -> (dr', pairs, da)
-        Release _ ->
+        Release l | nonreentrant lm u l ->
           (u:dr, pairs, da)
         _ -> s
     locksWithRef =
@@ -267,6 +269,8 @@ mkCDF lm h df = \vs ue ->
       case operation . normal $ ue of
         Read _ v | df vs v -> ue : cont
         Acquire _ -> ue : cont
+        Begin -> ue : cont
+        Join _ -> ue : cont
         _ -> cont
     controlFlow _ [] = []
 
@@ -290,19 +294,32 @@ mkCDF lm h df = \vs ue ->
 mkVarGenerator
   :: PartialHistory h
   => LockMap
+  -> MHB
   -> CDF
   -> h
   -> UE -> LIA UE
-mkVarGenerator lm cdf h =
-  \ue@(Unique i e) ->
+mkVarGenerator lm mh cdf h =
+  \ue@(Unique _ e) ->
     case operation e of
       Read l v ->
         phiRead writes cdf ue (l,v)
       Acquire l ->
         phiAcq lpwr cdf ue l
+      Begin ->
+        case mhbForkOf mh ue of
+          Just f -> cdf mempty f
+          Nothing -> And []
+      Join t' ->
+        case mhbEndOf mh t' of
+          Just f -> cdf mempty f
+          Nothing -> And []
+      Write _ v ->
+        cdf (valuesOf ue <> fromValue v) ue
+      Release _ ->
+        cdf mempty ue
       _ -> error $ "Wrong variable type: " ++ show e
   where
-    lpwr = lockPairsWithRef h
+    lpwr = lockPairsWithRef lm h
     writes = mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
 
 phiExecE
@@ -328,7 +345,7 @@ permuteBatch' (lm, mh, df) h = do
   solver <-
     setupLIA'
       (filter onlyNessary $ enumerate h)
-      (mkVarGenerator lm cdf h)
+      (mkVarGenerator lm mh cdf h)
       (And [sc h, mhbLia h])
   return $ \a -> do
     let es = candidateSet a
