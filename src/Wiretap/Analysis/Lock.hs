@@ -9,6 +9,7 @@ module Wiretap.Analysis.Lock
   , locksetFilter'
   , lockset
   , nonreentrant
+  , lockOf
   , LockMap
   , Deadlock(..)
 
@@ -131,6 +132,14 @@ lockset h =
 nonreentrant :: LockMap -> UE -> Ref -> Bool
 nonreentrant lm e l =
   M.notMember l (lm ! e)
+
+lockOf :: UE -> Maybe Ref
+lockOf (Unique _ e) =
+  case operation e of
+    Acquire l -> Just l
+    Request l -> Just l
+    Release l -> Just l
+    _ -> Nothing
 
 
 data LockEdgeLabel = LockEdgeLabel

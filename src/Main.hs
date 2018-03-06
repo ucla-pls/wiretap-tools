@@ -354,7 +354,6 @@ proveCandidates config p generator toString events = do
       => h
       -> StateT ProverState m ()
     chunkProver chunk = do
-      lm <- gets lockMap
       case getProver (prover config) of
         Nothing -> do
           foreachCandidate chunk $ \c -> do
@@ -366,7 +365,9 @@ proveCandidates config p generator toString events = do
                 modify $ addProven str
                 liftIO . putStrLn $ str
         Just cdf -> do
-          e <- evalZ3TWithTimeout (solveTime config) (solveChunk lm cdf chunk)
+          lm <- gets lockMap
+          mh <- gets mhbGraph
+          e <- evalZ3TWithTimeout (solveTime config) (solveChunk lm mh cdf chunk)
           case e of
             Right x ->
               return x
@@ -392,10 +393,11 @@ proveCandidates config p generator toString events = do
     solveChunk
       :: (PartialHistory h, MonadIO m', MonadState ProverState m')
       => LockMap
-      -> (h -> CDF)
+      -> MHB
+      -> DF
       -> h
       -> Z3T m' ()
-    solveChunk lm cfd chunk = do
+    solveChunk lm mh df chunk = do
       r <- liftIO $ newIORef Nothing
       foreachCandidate chunk $ \c -> do
         r' <- lift $ runEitherT (mapM_ ($ c) $ map getFilter (filters config))
@@ -407,7 +409,7 @@ proveCandidates config p generator toString events = do
               Nothing -> do
                 -- liftIO . logV $ "Computing initial solver"
                 liftIO $ logV "Computing initial solver:"
-                solver <- lift $ permuteBatch' (lm, cfd) chunk
+                solver <- lift $ permuteBatch' (lm, mh, df) chunk
                 liftIO $ writeIORef r (Just solver)
                 liftIO $ logV  "done."
                 return $ solver
@@ -508,13 +510,13 @@ proveCandidates config p generator toString events = do
 
     getProver name =
       case name of
-        "said"         -> Just cdfSaid
-        "dirk"         -> Just cdfDirk
-        "rvpredict"    -> Just cdfRVPredict
-        "free"         -> Just cdfFree
-        "valuesonly"   -> Just cdfValuesOnly
-        "refsonly"     -> Just cdfRefsOnly
-        "branchonly"   -> Just cdfBranchOnly
+        -- "said"         -> Just cdfSaid
+        "dirk"         -> Just dfDirk
+        -- "rvpredict"    -> Just cdfRVPredict
+        -- "free"         -> Just cdfFree
+        -- "valuesonly"   -> Just cdfValuesOnly
+        -- "refsonly"     -> Just cdfRefsOnly
+        -- "branchonly"   -> Just cdfBranchOnly
         "none"         -> Nothing
         _              -> error $ "Unknown prover: '" ++ name ++ "'"
 
@@ -525,7 +527,7 @@ cnf2dot
   :: PartialHistory h
   => Program.Program
   -> h
-  -> [[LIAAtom Int (Unique Event)]]
+  -> [[LIAAtom UE UE]]
   -> String
 cnf2dot p h cnf = unlines $
   [ "digraph {"

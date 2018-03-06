@@ -19,16 +19,24 @@ newtype History = History
 
 class PartialHistory h where
   enumerate :: h -> [UE]
+  hfold :: (Monoid m) => (UE -> m) -> h -> m
+  hfoldr :: (UE -> b -> b) -> b -> h -> b
 
 instance PartialHistory History where
   enumerate =
     byIndex . toList . toVector
+  hfold f = foldMap f . enumerate
+  hfoldr f b = foldr f b . enumerate
 
 instance PartialHistory [UE] where
   enumerate = id
+  hfold = foldMap
+  hfoldr = foldr
 
 instance PartialHistory (S.Set (UE)) where
   enumerate = S.toAscList
+  hfold = foldMap
+  hfoldr = foldr
 
 simulate :: PartialHistory h
   => (UE -> a -> a)

@@ -1,9 +1,10 @@
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses      #-}
+{-# LANGUAGE RankNTypes                 #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE TupleSections              #-}
+{-# LANGUAGE UndecidableInstances       #-}
 module Wiretap.Analysis.LIA
   ( LIA
   , LIA'(..)
@@ -19,42 +20,38 @@ module Wiretap.Analysis.LIA
   , Z3T
 
   , LIAError (..)
+  , MonadZ3
 
   , toCNF
-  , solve
-  , toZ3
-  , setupLIA
+--  , solve
+--  , toZ3
+--  , setupLIA
   , setupLIA'
 
   , liaSize
   )
 where
 
-import Prelude hiding (product)
+import           Prelude                    hiding (product)
 
-import qualified Data.IntMap.Strict as IM
-import qualified Data.List as L
+import qualified Data.IntMap.Strict         as IM
+-- import qualified Data.List                  as L
 
-import Control.Monad.IO.Class
-import Control.Monad.Trans.Reader (ReaderT)
-import Control.Monad.Reader hiding (local)
--- import Control.Monad.Trans
-import Control.Monad.State.Class
-import Control.Monad.Catch
+import           Control.Monad.Catch
+import           Control.Monad.IO.Class
+import           Control.Monad.Reader       hiding (local)
+import           Control.Monad.State.Class
+import           Control.Monad.Trans.Reader (ReaderT)
 
---import Control.Monad.Fix
-import Data.Unique
-
---import Data.Traversable
---import Data.Foldable hiding (product)
--- import Data.Void
+import           Data.IORef
+import           Data.Unique
 
 -- import Debug.Trace
-import Z3.Monad
-import qualified Z3.Base as Base
+import qualified Z3.Base                    as Base
+import           Z3.Monad
 
 {-| LIA - Linear integer arithmetic -}
-type LIA e = LIA' Int e
+type LIA e = LIA' e e
 
 data LIA' s e
   = Order !e !e
@@ -68,10 +65,10 @@ liaSize :: LIA' s e -> Integer
 liaSize lia =
   case lia of
     Order _ _ -> 1
-    Eq _ _ -> 1
-    And ls -> 1 + sum (map liaSize ls)
-    Or ls -> 1 + sum (map liaSize ls)
-    Var _ -> 1
+    Eq _ _    -> 1
+    And ls    -> 1 + sum (map liaSize ls)
+    Or ls     -> 1 + sum (map liaSize ls)
+    Var _     -> 1
 
 infixl 8 ~>
 (~>) :: e -> e -> LIA' s e
@@ -110,7 +107,7 @@ combinate f l =
   case l of
     a':[] -> a'
     a':as -> f a' $ combinate f as
-    [] -> []
+    []    -> []
 
 product :: (a -> b -> c) -> [a] -> [b] -> [c]
 product f as bs =
@@ -121,79 +118,90 @@ data LIAError
   | LIACouldNotSolveConstraints
   deriving (Show)
 
-{-| `setup`, takes a vector of elements and a list of symbols and setup the
-environment.
--}
-setupLIA
-  :: (MonadZ3 m, Show e)
-  => [Unique e]
-  -> [(Int, (LIA' Int (Unique e)))]
-  -> m (LIA' Int (Unique e) -> m (Maybe [Unique e]))
-setupLIA elems vars = do
-  eVars <-
-    fmap IM.fromDistinctAscList . forM elems $ \e -> do
-      o <- mkFreshIntVar "O"
-      s <- mkFreshBoolVar "S"
-      return (idx e,(e,o,s))
+-- {-| `setup`, takes a vector of elements and a list of symbols and setup the
+-- environment.
+-- -}
+-- setupLIA
+--   :: (MonadZ3 m, Show e)
+--   => [Unique e]
+--   -> [(Int, (LIA' Int (Unique e)))]
+--   -> m (LIA' Int (Unique e) -> m (Maybe [Unique e]))
+-- setupLIA elems vars = do
+--   eVars <-
+--     fmap IM.fromDistinctAscList . forM elems $ \e -> do
+--       o <- mkFreshIntVar "O"
+--       s <- mkFreshBoolVar "S"
+--       return (idx e,(e,o,s))
 
-  let solver = toZ3 (lookupOVar eVars) (lookupSVar eVars)
+--   ctx <- getContext
+--   let solver = liftIO $ toZ3 (lookupOVar eVars) (lookupSVar eVars) ctx
 
-  forM_ vars $ \(var, constraint) -> do
-    let s = lookupSVar eVars var
-    assert =<< mkImplies s =<< solver constraint
+--   forM_ vars $ \(var, constraint) -> do
+--     let s = lookupSVar eVars var
+--     assert =<< mkImplies s =<< solver constraint
 
-  let outer lia = local $ do
-        assert =<< solver lia
-        (_, solution) <- withModel $ \m -> do
-          solutions <- mapM (\(_, o, _) -> evalInt m o) eVars
-          return solutions
-        case solution of
-          Just assignment -> do
-            return . Just $ L.sortOn (\e -> assignment IM.! idx e) elems
-          Nothing ->
-            return Nothing
+--   let outer lia = local $ do
+--         assert =<< solver lia
+--         (_, solution) <- withModel $ \m -> do
+--           solutions <- mapM (\(_, o, _) -> evalInt m o) eVars
+--           return solutions
+--         case solution of
+--           Just assignment -> do
+--             return . Just $ L.sortOn (\e -> assignment IM.! idx e) elems
+--           Nothing ->
+--             return Nothing
 
-  return outer
+--   return outer
 
 setupLIA'
-  :: (MonadZ3 m, Show e)
+  :: forall m e. (MonadZ3 m, Show e)
   => [Unique e]
-  -> [(Int, (LIA' Int (Unique e)))]
-  -> LIA' Int (Unique e)
-  -> m (LIA' Int (Unique e) -> m Bool)
-setupLIA' elems vars base = do
-  eVars <-
+  -> (Unique e -> LIA' (Unique e) (Unique e))
+  -> LIA' (Unique e) (Unique e)
+  -> m (LIA' (Unique e) (Unique e) -> m Bool)
+setupLIA' elems f base = do
+  events <-
     fmap IM.fromDistinctAscList . forM elems $ \e -> do
       o <- mkFreshIntVar "O"
-      s <- mkFreshBoolVar "S"
-      return (idx e,(e,o,s))
+      return (idx e,(e,o))
 
-  let solver = toZ3 (lookupOVar eVars) (lookupSVar eVars)
+  var_ref <- liftIO $ newIORef IM.empty
+  ctx <- getContext
+  slv <- getSolver
 
-  assert =<< solver base
+  let
+    toAST' :: LIA' (Unique e) (Unique e) -> IO AST
+    toAST' = toZ3 (lookupOVar events) lookupS ctx
 
-  forM_ vars $ \(var, constraint) -> do
-    let s = lookupSVar eVars var
-    assert =<< mkImplies s =<< solver constraint
+    toAST :: LIA' (Unique e) (Unique e) -> m AST
+    toAST lia = liftIO $ toAST' lia
 
-  let outer lia = local $ do
-            assert =<< solver lia
-            rest <- check
-            return $ rest == Sat
+    lookupS ue = do
+      vars <- readIORef var_ref
+      case IM.lookup (idx ue) vars of
+        Just symbol ->
+          return symbol
+        Nothing -> do
+          symbol <- Base.mkFreshBoolVar ctx "S"
+          writeIORef var_ref (IM.insert (idx ue) symbol vars)
+          ast <- toAST' (f ue)
+          imp <- Base.mkImplies ctx symbol ast
+          Base.solverAssertCnstr ctx slv imp
+          return symbol
 
+    outer lia = local $ do
+      assert =<< toAST lia
+      rest <- check
+      return $ rest == Sat
+
+  assert =<< toAST base
   return outer
 
-lookupOVar :: Show e => IM.IntMap (Unique e, a, b) -> Unique e -> a
+lookupOVar :: Show e => IM.IntMap (Unique e, a) -> Unique e -> a
 lookupOVar vars e =
   case IM.lookup (idx e) vars of
-    Just (_, o, _) -> o
-    Nothing -> error $ "Could not find " ++ show e ++ " in vars."
-
-lookupSVar :: Show e => IM.IntMap (Unique e, a, b) -> Int -> b
-lookupSVar vars e =
-  case IM.lookup e vars of
-    Just (_, _, s) -> s
-    Nothing -> error $ "Could not find " ++ show e ++ " in vars."
+    Just (_, o) -> o
+    Nothing     -> error $ "Could not find " ++ show e ++ " in vars."
 
 data Z3EnvC
   = Z3EnvC {
@@ -261,48 +269,39 @@ evalZ3T =
   evalZ3TWithTimeout 0
 
 
-{-| solve takes a vector of elements and logic constraints
+-- {-| solve takes a vector of elements and logic constraints
 
-This function assumes that the list of unique's contains all
-the elements in the LIA, and that the uniq list distinct in it's
-id and strictly ascending.
--}
-solve :: (MonadIO m, Show e)
-  => [Unique e]
-  -> [(Int, (LIA' Int (Unique e)))]
-  -> LIA' Int (Unique e)
-  -> m (Maybe [Unique e])
-solve elems symbols lia = liftIO $ evalZ3 $ do
-  f <- setupLIA elems symbols
-  f lia
+-- This function assumes that the list of unique's contains all
+-- the elements in the LIA, and that the uniq list distinct in it's
+-- id and strictly ascending.
+-- -}
+-- solve :: (MonadIO m, Show e)
+--   => [Unique e]
+--   -> [(Int, (LIA' Int (Unique e)))]
+--   -> LIA' Int (Unique e)
+--   -> m (Maybe [Unique e])
+-- solve elems symbols lia = liftIO $ evalZ3 $ do
+--   f <- setupLIA elems symbols
+--   f lia
 
-toZ3' ::
+toZ3 ::
   (e -> AST)
-  -> (s -> AST)
+  -> (s -> IO AST)
   -> Base.Context
   -> LIA' s e -> IO AST
-toZ3' evar svar x = go
+toZ3 evar svar ctx = go
   where
   go lia =
     case lia of
       And [] ->
-        Base.mkTrue x
+        Base.mkTrue ctx
       And cs ->
-        Base.mkAnd x =<< mapM go cs
+        Base.mkAnd ctx =<< mapM go cs
       Or cs ->
-        Base.mkOr x =<< mapM go cs
+        Base.mkOr ctx =<< mapM go cs
       Order a b ->
-        Base.mkLt x (evar a) (evar b)
+        Base.mkLt ctx (evar a) (evar b)
       Eq a b ->
-        Base.mkEq x (evar a) (evar b)
+        Base.mkEq ctx (evar a) (evar b)
       Var s ->
-        return $ svar s
-
-toZ3 :: MonadZ3 m
-  => (e -> AST)
-  -> (s -> AST)
-  -> LIA' s e
-  -> m AST
-toZ3 evar svar lia = do
-  c <- getContext
-  liftIO $ toZ3' evar svar c lia
+        svar s
