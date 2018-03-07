@@ -162,7 +162,7 @@ setupLIA'
 setupLIA' elems f base = do
   events <-
     fmap IM.fromDistinctAscList . forM elems $ \e -> do
-      o <- mkFreshIntVar "O"
+      o <- mkFreshRealVar "O"
       return (idx e,(e,o))
 
   var_ref <- liftIO $ newIORef IM.empty
@@ -198,9 +198,9 @@ setupLIA' elems f base = do
 
     outer lia = do
       -- traceM $ "Compiling top LIA"
-      ast <- toAST lia
-      vars <- liftIO $ readIORef var_ref
+      -- vars <- liftIO $ readIORef var_ref
       -- traceM $ "Variables: " ++ show (IM.size vars)
+      ast <- toAST lia
       local $ do
         -- traceM $ "Asserted top LIA"
         assert ast
@@ -273,7 +273,7 @@ evalZ3TWithTimeout timeout (Z3T s) = do
   let opts = stdOpts +? if timeout > 0
         then (opt "timeout" timeout)
         else mempty
-  env <- liftIO $ newEnvC Nothing opts
+  env <- liftIO $ newEnvC (Just QF_LRA) opts
   (Right <$> runReaderT s env) `catch` (return . Left)
 
 evalZ3T
@@ -312,6 +312,8 @@ toZ3 evar svar ctx = go
         Base.mkTrue ctx
       And cs ->
         Base.mkAnd ctx =<< mapM go cs
+      Or [] ->
+        Base.mkFalse
       Or cs ->
         Base.mkOr ctx =<< mapM go cs
       Order a b ->

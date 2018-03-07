@@ -177,6 +177,7 @@ lockPairsWithRef h =
 type CDF = ValueSet -> UE -> LIA UE
 type DF = ValueSet -> Value -> Bool
 
+
 phiRead
   :: M.Map Location [(Value, UE)]
   -> (UE -> LIA UE)
@@ -192,7 +193,7 @@ phiRead writes cdf mh r (l, v) =
     Just rwrites ->
       case [ w | (v', w) <- rwrites , v' == v, not $ mhb mh r w ] of
         [] ->
-          And [ r ~> w' | (_, w') <- rwrites, not $ mhb mh r w']
+          And [ r ~> w' | (_, w') <- rwrites]
           -- ^ If there is no writes with the same value, that not is ordered
           -- after the read, then assume that the read must be reading
           -- something that was written before, ei. ordered before all other writes.
@@ -206,7 +207,7 @@ phiRead writes cdf mh r (l, v) =
             , not $ mhb mh r w'
             ]
           | w <- rvwrites
-          , not $ mhb mh r w
+          , not $ mhb mh e a
           ]
 
 phiAcq
@@ -231,7 +232,7 @@ phiAcq lpwr cdf mh e ref' =
     [ e ~> a
     | a <- da
     , e /= a
-    , not $ mhb mh e a
+    , mhbFree mh e a
     ]
   ]
   where
