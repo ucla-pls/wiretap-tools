@@ -182,31 +182,19 @@ setupLIA' elems f base = do
         Just symbol ->
           return symbol
         Nothing -> do
-          -- traceM $ "Adding: "  ++ show ue
           symbol <- Base.mkFreshBoolVar ctx "S"
           writeIORef var_ref (IM.insert (idx ue) symbol vars)
-          -- traceM $ "Computing constraints: "
           let x = (f ue)
-          -- traceM $ show x
-          -- traceM $ "Recursively evaluating ast"
           ast <- toAST' x
           imp <- Base.mkEq ctx symbol ast
-          -- traceM $ "Asserting " ++ show ue
           Base.solverAssertCnstr ctx slv imp
-          -- traceM $ "Asserted."
           return symbol
 
     outer lia = do
-      -- traceM $ "Compiling top LIA"
-      -- vars <- liftIO $ readIORef var_ref
-      -- traceM $ "Variables: " ++ show (IM.size vars)
       ast <- toAST lia
       local $ do
-        -- traceM $ "Asserted top LIA"
         assert ast
-        -- traceM $ "Checking Consistency"
         rest <- check
-        -- traceM $ "Done"
         return $ rest == Sat
 
   assert =<< toAST base
@@ -283,22 +271,6 @@ evalZ3T
 evalZ3T =
   evalZ3TWithTimeout 0
 
-
--- {-| solve takes a vector of elements and logic constraints
-
--- This function assumes that the list of unique's contains all
--- the elements in the LIA, and that the uniq list distinct in it's
--- id and strictly ascending.
--- -}
--- solve :: (MonadIO m, Show e)
---   => [Unique e]
---   -> [(Int, (LIA' Int (Unique e)))]
---   -> LIA' Int (Unique e)
---   -> m (Maybe [Unique e])
--- solve elems symbols lia = liftIO $ evalZ3 $ do
---   f <- setupLIA elems symbols
---   f lia
-
 toZ3 ::
   (e -> AST)
   -> (s -> IO AST)
@@ -313,7 +285,7 @@ toZ3 evar svar ctx = go
       And cs ->
         Base.mkAnd ctx =<< mapM go cs
       Or [] ->
-        Base.mkFalse
+        Base.mkFalse ctx
       Or cs ->
         Base.mkOr ctx =<< mapM go cs
       Order a b ->

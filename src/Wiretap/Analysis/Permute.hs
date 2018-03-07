@@ -92,63 +92,6 @@ mhbLia h =
     update u l =
       updateDefault ([], [], [], []) (over l (u:))
 
-data ValueSet = ValueSet
-  { vsRefs   :: !(S.Set Ref)
-  , vsValues :: ! Bool
-  , vsBranch :: ! Bool
-  } deriving (Eq, Show)
-
-instance Monoid ValueSet where
-  mempty = ValueSet S.empty False False
-  mappend x y =
-    ValueSet
-      (vsRefs x `S.union` vsRefs y)
-      (vsValues x || vsValues y)
-      (vsBranch x || vsBranch y)
-
-fromRef :: Ref -> ValueSet
-fromRef r =
-  ValueSet (S.singleton r) False False
-
-fromLocation :: Location -> ValueSet
-fromLocation l =
-  case l of
-    Dynamic r _ -> fromRef r
-    Array r _   -> (fromRef r) { vsValues = True }
-    _           -> mempty
-
-fromValue :: Value -> ValueSet
-fromValue v =
-  case v of
-    Object r -> fromRef (Ref r)
-    _        -> mempty { vsValues = True }
-
-fromBranch :: ValueSet
-fromBranch =
-  mempty { vsBranch = True }
-
--- | Get all refs known by the event at the moment of execution.
--- TODO: Fix problem with write
-valuesOf :: UE -> ValueSet
-valuesOf (Unique _ e) =
-  case operation e of
-    Write l _ ->
-      fromLocation l
-    Read l _ ->
-      fromLocation l
-    Acquire r ->
-      fromRef r
-    Release r ->
-      fromRef r
-    Request r ->
-      fromRef r
-    Branch ->
-      fromBranch
-    Enter r _ | pointer r /= 0 ->
-      fromRef r
-    _ ->
-      mempty
-
 lockPairsWithRef
   :: PartialHistory h
   => h
@@ -173,10 +116,6 @@ lockPairsWithRef h =
         filter' (Acquire l) = Just l
         filter' (Release l) = Just l
         filter' _           = Nothing
-
-type CDF = ValueSet -> UE -> LIA UE
-type DF = ValueSet -> Value -> Bool
-
 
 phiRead
   :: M.Map Location [(Value, UE)]
@@ -207,7 +146,7 @@ phiRead writes cdf mh r (l, v) =
             , not $ mhb mh r w'
             ]
           | w <- rvwrites
-          , not $ mhb mh e a
+          , not $ mhb mh r w
           ]
 
 phiAcq
@@ -250,6 +189,9 @@ phiExecE cdf es =
   [ cdf mempty e
   | e <- S.toList es
   ]
+
+type CDF = ValueSet -> UE -> LIA UE
+type DF = ValueSet -> Value -> Bool
 
 equate :: CandidateSet -> LIA UE
 equate es =
@@ -343,24 +285,6 @@ mkVarGenerator _ mh cdf h =
     lpwr = lockPairsWithRef h
     writes = mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
 
-dfFree :: DF
-dfFree _ _ = False
-
-dfSaid :: DF
-dfSaid _ _ = True
-
-dfRVPredict :: DF
-dfRVPredict (ValueSet refs hasValue hasBranch) _ =
-  not (S.null refs) || hasValue || hasBranch
-
-dfDirk :: DF
-dfDirk (ValueSet refs hasValue hasBranch) v =
-  case v of
-    _ | hasValue || hasBranch -> True
-    (Object v') | Ref v' `S.member` refs -> True
-    _ -> False
-
-
 permuteBatch'
   :: (PartialHistory h, MonadZ3 m, Candidate a)
   => (LockMap, MHB, DF)
@@ -381,3 +305,83 @@ permuteBatch' (lm, mh, df) h = do
     else left $ x
 
   where cdf = mkCDF lm h df
+
+
+-- Dfs
+
+dfFree :: DF
+dfFree _ _ = False
+
+dfSaid :: DF
+dfSaid _ _ = True
+
+dfRVPredict :: DF
+dfRVPredict (ValueSet refs hasValue hasBranch) _ =
+  not (S.null refs) || hasValue || hasBranch
+
+dfDirk :: DF
+dfDirk (ValueSet refs hasValue hasBranch) v =
+  case v of
+    _ | hasValue || hasBranch -> True
+    (Object v') | Ref v' `S.member` refs -> True
+    _ -> False
+
+
+-- The value set.
+
+data ValueSet = ValueSet
+  { vsRefs   :: !(S.Set Ref)
+  , vsValues :: ! Bool
+  , vsBranch :: ! Bool
+  } deriving (Eq, Show)
+
+instance Monoid ValueSet where
+  mempty = ValueSet S.empty False False
+  mappend x y =
+    ValueSet
+      (vsRefs x `S.union` vsRefs y)
+      (vsValues x || vsValues y)
+      (vsBranch x || vsBranch y)
+
+fromRef :: Ref -> ValueSet
+fromRef r =
+  ValueSet (S.singleton r) False False
+
+fromLocation :: Location -> ValueSet
+fromLocation l =
+  case l of
+    Dynamic r _ -> fromRef r
+    Array r _   -> (fromRef r) { vsValues = True }
+    _           -> mempty
+
+fromValue :: Value -> ValueSet
+fromValue v =
+  case v of
+    Object r -> fromRef (Ref r)
+    _        -> mempty { vsValues = True }
+
+fromBranch :: ValueSet
+fromBranch =
+  mempty { vsBranch = True }
+
+-- | Get all refs known by the event at the moment of execution.
+-- TODO: Fix problem with write
+valuesOf :: UE -> ValueSet
+valuesOf (Unique _ e) =
+  case operation e of
+    Write l _ ->
+      fromLocation l
+    Read l _ ->
+      fromLocation l
+    Acquire r ->
+      fromRef r
+    Release r ->
+      fromRef r
+    Request r ->
+      fromRef r
+    Branch ->
+      fromBranch
+    Enter r _ | pointer r /= 0 ->
+      fromRef r
+    _ ->
+      mempty
