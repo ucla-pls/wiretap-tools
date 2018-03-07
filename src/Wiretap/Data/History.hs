@@ -25,16 +25,20 @@ class PartialHistory h where
 instance PartialHistory History where
   enumerate =
     byIndex . toList . toVector
+  {-# INLINE enumerate #-}
   hfold f = foldMap f . enumerate
   hfoldr f b = foldr f b . enumerate
 
 instance PartialHistory [UE] where
   enumerate = id
+  {-# INLINE enumerate #-}
   hfold = foldMap
   hfoldr = foldr
 
 instance PartialHistory (S.Set (UE)) where
   enumerate = S.toAscList
+
+  {-# INLINE enumerate #-}
   hfold = foldMap
   hfoldr = foldr
 

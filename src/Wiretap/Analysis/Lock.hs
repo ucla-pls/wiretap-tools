@@ -127,6 +127,7 @@ lockset h =
   map (\e -> (normal e, locks ! e)) $ enumerate h
   where locks = lockMap h
 
+
 -- A non reentrant lock has does not have it's own lock in
 -- the its own lockset.
 nonreentrant :: LockMap -> UE -> Ref -> Bool
@@ -158,6 +159,8 @@ data DeadlockEdge = DeadlockEdge
 data Deadlock = Deadlock
   { deadlockCycle :: S.Set DeadlockEdge
   } deriving (Show, Ord, Eq)
+
+
 
 instance Candidate Deadlock where
   candidateSet =

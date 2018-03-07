@@ -510,10 +510,10 @@ proveCandidates config p generator toString events = do
 
     getProver name =
       case name of
-        -- "said"         -> Just cdfSaid
+        "said"         -> Just dfSaid
         "dirk"         -> Just dfDirk
-        -- "rvpredict"    -> Just cdfRVPredict
-        -- "free"         -> Just cdfFree
+        "rvpredict"    -> Just dfRVPredict
+        "free"         -> Just dfFree
         -- "valuesonly"   -> Just cdfValuesOnly
         -- "refsonly"     -> Just cdfRefsOnly
         -- "branchonly"   -> Just cdfBranchOnly

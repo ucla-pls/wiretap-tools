@@ -35,16 +35,35 @@ dependencies:
 executable:
   main: Main.hs
   source-dirs: src
+  dependencies:
+    - wiretap-tools
   ghc-options:
     -O3
     -threaded
     -Wall
     -funbox-strict-fields
 
+library:
+  source-dirs: src
+  ghc-options:
+    -Wall
+
+tests:
+  wt-test:
+    main: Main.hs
+    source-dirs: src
+    dependencies:
+      - wiretap-tools
+    ghc-options:
+      -threaded
+      -funbox-strict-fields
+
 benchmarks:
   wt-prof:
     main: Main.hs
     source-dirs: src
+    dependencies:
+    - wiretap-tools
     ghc-options:
       -O3
       -threaded

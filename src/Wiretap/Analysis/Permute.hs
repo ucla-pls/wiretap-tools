@@ -5,9 +5,9 @@
 {-# LANGUAGE TemplateHaskell  #-}
 module Wiretap.Analysis.Permute
   ( dfDirk
-  -- , cdfRVPredict
-  -- , cdfSaid
-  -- , cdfFree
+  , dfRVPredict
+  , dfSaid
+  , dfFree
   -- , cdfRefsOnly
   -- , cdfBranchOnly
   -- , cdfValuesOnly
@@ -38,7 +38,8 @@ import qualified Data.Map                          as M
 import qualified Data.Set                          as S
 import           Data.Unique
 import           Data.Monoid
--- import           Debug.Trace
+
+-- import  Wiretap.Format.Text
 
 import           Wiretap.Analysis.LIA
 import           Wiretap.Analysis.Lock
@@ -92,9 +93,9 @@ mhbLia h =
       updateDefault ([], [], [], []) (over l (u:))
 
 data ValueSet = ValueSet
-  { vsRefs   :: S.Set Ref
-  , vsValues :: Bool
-  , vsBranch :: Bool
+  { vsRefs   :: !(S.Set Ref)
+  , vsValues :: ! Bool
+  , vsBranch :: ! Bool
   } deriving (Eq, Show)
 
 instance Monoid ValueSet where
@@ -150,20 +151,20 @@ valuesOf (Unique _ e) =
 
 lockPairsWithRef
   :: PartialHistory h
-  => LockMap
-  -> h
+  => h
   -> M.Map Ref ([UE], [(UE, UE)], [UE])
-lockPairsWithRef lm h =
+lockPairsWithRef h =
   M.map (simulateReverse pairer ([], [], [])) locksWithRef
   where
     pairer u@(Unique _ e) s@(dr, pairs, da)=
       case operation e of
-        Acquire l | nonreentrant lm u l ->
+        Acquire _ ->
           case dr of
             []    -> (dr, pairs, u:da)
             [r]   -> ([], (u, r):pairs, da)
             _:dr' -> (dr', pairs, da)
-        Release l | nonreentrant lm u l ->
+            -- ^ Do not report reentrant locks
+        Release _ ->
           (u:dr, pairs, da)
         _ -> s
     locksWithRef =
@@ -178,51 +179,58 @@ type DF = ValueSet -> Value -> Bool
 
 phiRead
   :: M.Map Location [(Value, UE)]
-  -> CDF
+  -> (UE -> LIA UE)
+  -> MHB
   -> UE -> (Location, Value)
-  -> LIA' UE UE
-phiRead writes cdf r (l, v) =
+  -> LIA UE
+phiRead writes cdf mh r (l, v) =
   case M.lookup l writes of
     Nothing ->
       And []
       -- ^ If no writes assume that the read is consistent, ei. Reads what it
       -- is supposed to.
     Just rwrites ->
-      case [ w | (v', w) <- rwrites , v' == v , r ~/> w ] of
+      case [ w | (v', w) <- rwrites , v' == v, not $ mhb mh r w ] of
         [] ->
-          And [ r ~> w' | (_, w') <- rwrites ]
+          And [ r ~> w' | (_, w') <- rwrites, not $ mhb mh r w']
           -- ^ If there is no writes with the same value, that not is ordered
           -- after the read, then assume that the read must be reading
           -- something that was written before, ei. ordered before all other writes.
         rvwrites ->
           Or
-          [ And $ cdf (fromValue v) w : w ~> r :
+          [ And $ cdf w : w ~> r :
             [ Or [ w' ~> w, r ~> w']
             | (_, w') <- rwrites
-            , w' /= w , w' ~/> w, r ~/> w'
+            , w' /= w
+            , not $ mhb mh w' w
+            , not $ mhb mh r w'
             ]
           | w <- rvwrites
+          , not $ mhb mh r w
           ]
 
 phiAcq
   :: (M.Map Ref ([UE], [(UE, UE)], [UE]))
-  -> CDF
-  -> UE -> Ref
+  -> (UE -> LIA UE)
+  -> MHB
+  -> UE
+  -> Ref
   -> LIA' UE UE
-phiAcq lpwr cdf a ref' =
+phiAcq lpwr cdf mh e ref' =
   And
   [ And
     [ Or
-      [ a ~> a'
-      , And [ r' ~> a, cdf mempty (r') ]
+      [ e ~> a
+      , And [ r ~> e, cdf r ]
       ]
-    | (a', r') <- pairs
-    , a' /= a, a' ~/> a, a' ~/> a
+    | (a, r) <- pairs
+    , e /= a
+    , not $ mhb mh e a
     ]
   , And
-    [ a ~> a'
-    | a' <- da
-    , a' /= a, a' ~/> a, a' ~/> a
+    [ e ~> a
+    | a <- da
+    , e /= a -- , not $ mhb mh e a
     ]
   ]
   where
@@ -230,97 +238,6 @@ phiAcq lpwr cdf a ref' =
       case M.lookup ref' lpwr of
         Just pairs' -> pairs'
         Nothing -> error $ "The ref " ++ show ref' ++ " has no lock-pairs. (Should not happen)"
-
--- generateVars
---   :: PartialHistory h
---   => LockMap
---   -> (h -> CDF)
---   -> h
---   -> [(Int, (LIA' Int UE))]
--- generateVars lm f h =
---   onReads (\r x -> (idx r, phiRead lm writes (f h) r x)) h
---   ++ onNonReentrantAcquires lm (\a l -> (idx a, phiAcq lm lpwr (f h) a l)) h
---   where
---     lpwr = lockPairsWithRef h
---     writes = mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
-
-dfDirk :: DF
-dfDirk (ValueSet refs hasValue hasBranch) v =
-  case v of
-    _ | hasValue || hasBranch -> True
-    (Object v') | Ref v' `S.member` refs -> True
-    _ -> False
-
-mkCDF
-  :: PartialHistory h
-  => LockMap
-  -> h
-  -> (ValueSet -> Value -> Bool)
-  -> CDF
-mkCDF lm h df = \vs ue ->
-  And . map (Var) $ controlFlow vs (uthread ! ue)
-  where
-    controlFlow :: ValueSet -> [UE] -> [UE]
-    controlFlow vs (ue:rest) =
-      let
-        vs' = vs <> valuesOf ue
-        cont = controlFlow vs' rest
-      in
-      case operation . normal $ ue of
-        Read _ v | df vs v -> ue : cont
-        Acquire _ -> ue : cont
-        Begin -> ue : cont
-        Join _ -> ue : cont
-        _ -> cont
-    controlFlow _ [] = []
-
-    uthread :: UniqueMap [UE]
-    uthread = fromUniques (imapf [])
-
-    (_, imapf) = hfoldr folder (M.empty, id) h
-
-    folder ue (threads, cont) =
-      let
-        shouldAdd = maybe True (nonreentrant lm ue) $ lockOf ue
-        t = threadOf ue
-        lst = maybe [] (ue:) $ M.lookup t threads
-      in
-       if shouldAdd then
-         ( M.insert t lst threads, (fmap (const lst) ue :) . cont)
-       else
-         ( threads, cont )
-
-
-mkVarGenerator
-  :: PartialHistory h
-  => LockMap
-  -> MHB
-  -> CDF
-  -> h
-  -> UE -> LIA UE
-mkVarGenerator lm mh cdf h =
-  \ue@(Unique _ e) ->
-    case operation e of
-      Read l v ->
-        phiRead writes cdf ue (l,v)
-      Acquire l ->
-        phiAcq lpwr cdf ue l
-      Begin ->
-        case mhbForkOf mh ue of
-          Just f -> cdf mempty f
-          Nothing -> And []
-      Join t' ->
-        case mhbEndOf mh t' of
-          Just f -> cdf mempty f
-          Nothing -> And []
-      Write _ v ->
-        cdf (valuesOf ue <> fromValue v) ue
-      Release _ ->
-        cdf mempty ue
-      _ -> error $ "Wrong variable type: " ++ show e
-  where
-    lpwr = lockPairsWithRef lm h
-    writes = mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
 
 phiExecE
   :: CDF
@@ -335,6 +252,105 @@ phiExecE cdf es =
 equate :: CandidateSet -> LIA UE
 equate es =
   And . L.map (uncurry Eq) $ combinations (S.toList es)
+
+mkCDF
+  :: PartialHistory h
+  => LockMap
+  -> h
+  -> (ValueSet -> Value -> Bool)
+  -> CDF
+mkCDF lm h df =
+  \vs ue ->
+    case operation $ normal ue of
+      -- If it is a branch event then we know everything after needs to be
+      -- consistent
+      Branch ->
+        And . map (Var) $ uthread ! ue
+
+      -- Otherwise do your thing
+      _ ->
+        And . map (Var) $ controlFlow vs (uthread ! ue)
+  where
+    controlFlow :: ValueSet -> [UE] -> [UE]
+    controlFlow !vs (ue':rest) =
+      let
+        vs' = vs <> valuesOf ue'
+        cont = controlFlow vs' rest
+      in
+      case operation . normal $ ue' of
+        Read _ v | df vs v -> ue' : cont
+        Acquire l | nonreentrant lm ue' l -> ue' : cont
+        Begin -> ue' : cont
+        Join _ -> ue' : cont
+        _ -> cont
+    controlFlow _ [] = []
+
+    uthread :: UniqueMap [UE]
+    uthread = fromUniques (imapf [])
+
+    (_, imapf) = simulate folder (M.empty, id) h
+
+    folder ue (threads, cont) =
+      let
+        shouldAdd = True -- maybe True (nonreentrant lm ue) $ lockOf ue
+        t = threadOf ue
+        lst = maybe [] (ue:) $ M.lookup t threads
+      in
+       if shouldAdd then
+         ( M.insert t lst threads, cont . (fmap (const lst) ue :))
+       else
+         ( threads, cont )
+
+
+mkVarGenerator
+  :: PartialHistory h
+  => LockMap
+  -> MHB
+  -> CDF
+  -> h
+  -> UE -> LIA UE
+mkVarGenerator _ mh cdf h =
+  inner
+  where
+    inner ue@(Unique _ e) =
+      case operation e of
+        Read l v ->
+          phiRead writes Var mh ue (l,v)
+        Acquire l ->
+          phiAcq lpwr Var mh ue l
+        Begin ->
+          case mhbForkOf mh ue of
+            Just f -> cdf mempty f
+            Nothing -> And []
+        Join t' ->
+          case mhbEndOf mh t' of
+            Just e' -> cdf mempty e'
+            Nothing -> And []
+        Write _ v ->
+          cdf (fromValue v) ue
+        Release _ ->
+          cdf mempty ue
+        _ -> error $ "Wrong variable type: " ++ show e
+    lpwr = lockPairsWithRef h
+    writes = mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
+
+dfFree :: DF
+dfFree _ _ = False
+
+dfSaid :: DF
+dfSaid _ _ = True
+
+dfRVPredict :: DF
+dfRVPredict (ValueSet refs hasValue hasBranch) _ =
+  not (S.null refs) || hasValue || hasBranch
+
+dfDirk :: DF
+dfDirk (ValueSet refs hasValue hasBranch) v =
+  case v of
+    _ | hasValue || hasBranch -> True
+    (Object v') | Ref v' `S.member` refs -> True
+    _ -> False
+
 
 permuteBatch'
   :: (PartialHistory h, MonadZ3 m, Candidate a)

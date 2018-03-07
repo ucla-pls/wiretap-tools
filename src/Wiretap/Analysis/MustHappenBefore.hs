@@ -50,8 +50,23 @@ mhb' m e1 e2 =
     (f, t) <- Map.lookup (thread e1, thread e2) m
     return $ (order e1) <= f && t <= (order e2)
 
+{-# INLINE mhb' #-}
+
 mhb :: MHB -> UE -> UE -> Bool
 mhb m (Unique _ e1) (Unique _ e2) = mhb' (m^.mhbEventGraph) e1 e2
+
+{-# INLINE mhb #-}
+
+mhbDependend :: MHB -> UE -> UE -> Bool
+mhbDependend m e1 e2 =
+  mhb m e1 e2 || mhb m e2 e1
+
+{-# INLINE mhbDependend #-}
+
+mhbFree :: MHB -> UE -> UE -> Bool
+mhbFree m e1 e2 = not $ mhbDependend m e1 e2
+
+{-# INLINE mhbFree #-}
 
 mustHappenBefore ::
   PartialHistory h

@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 85f998947eb15dea09e5fe6aa328e62e6ceee17dab998786b029195e6a2485ce
+-- hash: 26ac0a13b73509d3df547247ff1243564f749dfd07755a6df6fc54452a64c6f6
 
 name:           wiretap-tools
 version:        0.1.0.0
@@ -18,6 +18,60 @@ cabal-version:  >= 1.10
 extra-source-files:
     ChangeLog.md
     README.mkd
+
+library
+  hs-source-dirs:
+      src
+  ghc-options: -Wall
+  build-depends:
+      QuickCheck >=2.8
+    , base >=4.9 && <4.10
+    , binary
+    , bytestring >=0.10.8.1
+    , containers >=0.5.7.1
+    , directory >=1.2.6.2
+    , docopt
+    , either >=4.4.1.1
+    , exceptions
+    , fgl
+    , filepath >=1.4.1.0
+    , lens >=4.14
+    , mtl >=2.2.1
+    , pipes
+    , pipes-binary >=0.4.1
+    , pipes-bytestring
+    , pipes-parse >=3.0.7
+    , transformers >=0.5.2.0
+    , vector
+    , z3 >=4.1.0
+  exposed-modules:
+      Data.PartialOrder
+      Data.Stream
+      Data.Unique
+      Main
+      Pipes.Missing
+      Wiretap.Analysis
+      Wiretap.Analysis.Count
+      Wiretap.Analysis.DataRace
+      Wiretap.Analysis.Group
+      Wiretap.Analysis.LIA
+      Wiretap.Analysis.Linearize
+      Wiretap.Analysis.Lock
+      Wiretap.Analysis.MustHappenBefore
+      Wiretap.Analysis.Permute
+      Wiretap.Data.Event
+      Wiretap.Data.History
+      Wiretap.Data.Log
+      Wiretap.Data.MiniParser
+      Wiretap.Data.Program
+      Wiretap.Data.Proof
+      Wiretap.Format.Binary
+      Wiretap.Format.Text
+      Wiretap.Graph
+      Wiretap.Utils
+  other-modules:
+      Paths_wiretap_tools
+  default-language: Haskell2010
 
 executable wiretap-tools
   main-is: Main.hs
@@ -44,6 +98,62 @@ executable wiretap-tools
     , pipes-parse >=3.0.7
     , transformers >=0.5.2.0
     , vector
+    , wiretap-tools
+    , z3 >=4.1.0
+  other-modules:
+      Data.PartialOrder
+      Data.Stream
+      Data.Unique
+      Pipes.Missing
+      Wiretap.Analysis
+      Wiretap.Analysis.Count
+      Wiretap.Analysis.DataRace
+      Wiretap.Analysis.Group
+      Wiretap.Analysis.LIA
+      Wiretap.Analysis.Linearize
+      Wiretap.Analysis.Lock
+      Wiretap.Analysis.MustHappenBefore
+      Wiretap.Analysis.Permute
+      Wiretap.Data.Event
+      Wiretap.Data.History
+      Wiretap.Data.Log
+      Wiretap.Data.MiniParser
+      Wiretap.Data.Program
+      Wiretap.Data.Proof
+      Wiretap.Format.Binary
+      Wiretap.Format.Text
+      Wiretap.Graph
+      Wiretap.Utils
+      Paths_wiretap_tools
+  default-language: Haskell2010
+
+test-suite wt-test
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs:
+      src
+  ghc-options: -threaded -funbox-strict-fields
+  build-depends:
+      QuickCheck >=2.8
+    , base >=4.9 && <4.10
+    , binary
+    , bytestring >=0.10.8.1
+    , containers >=0.5.7.1
+    , directory >=1.2.6.2
+    , docopt
+    , either >=4.4.1.1
+    , exceptions
+    , fgl
+    , filepath >=1.4.1.0
+    , lens >=4.14
+    , mtl >=2.2.1
+    , pipes
+    , pipes-binary >=0.4.1
+    , pipes-bytestring
+    , pipes-parse >=3.0.7
+    , transformers >=0.5.2.0
+    , vector
+    , wiretap-tools
     , z3 >=4.1.0
   other-modules:
       Data.PartialOrder
@@ -98,6 +208,7 @@ benchmark wt-prof
     , pipes-parse >=3.0.7
     , transformers >=0.5.2.0
     , vector
+    , wiretap-tools
     , z3 >=4.1.0
   other-modules:
       Data.PartialOrder

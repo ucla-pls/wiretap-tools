@@ -17,24 +17,28 @@ data Group a = Group
   , writes   :: [a]
   , begins   :: [a]
   , ends     :: [a]
+  , branches :: [a]
+  , enters   :: [a]
   } deriving (Show)
 
 instance Monoid (Group a) where
-  mempty = Group [] [] [] [] [] [] [] [] [] []
+  mempty = Group [] [] [] [] [] [] [] [] [] [] [] []
   mappend a b = Group
-    { synchs   = add synchs
-    , acquires = add acquires
-    , requests = add requests
-    , releases = add releases
-    , forks    = add forks
-    , joins    = add joins
-    , reads    = add reads
-    , writes   = add writes
-    , begins   = add begins
-    , ends     = add ends
+    { synchs   = add' synchs
+    , acquires = add' acquires
+    , requests = add' requests
+    , releases = add' releases
+    , forks    = add' forks
+    , joins    = add' joins
+    , reads    = add' reads
+    , writes   = add' writes
+    , begins   = add' begins
+    , ends     = add' ends
+    , branches = add' branches
+    , enters   = add' enters
     }
     where
-      add f = f a ++ f b
+      add' f = f a ++ f b
 
 fromEvent :: Event -> Group Event
 fromEvent = addOn id mempty
@@ -55,6 +59,8 @@ addOn f c e =
    Write _ _ -> c { writes   = e : writes c }
    Begin     -> c { begins   = e : begins c }
    End       -> c { ends     = e : ends c }
+   Branch    -> c { branches = e : branches c }
+   Enter _ _ -> c { enters   = e : enters c }
 
 groupOn :: (a -> Event) -> [a] -> Group a
 groupOn f =
