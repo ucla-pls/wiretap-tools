@@ -46,7 +46,7 @@ import           Control.Monad.Trans.Reader (ReaderT)
 import           Data.IORef
 import           Data.Unique
 
-import Debug.Trace
+-- import Debug.Trace
 import qualified Z3.Base                    as Base
 import           Z3.Monad
 
@@ -190,21 +190,23 @@ setupLIA' elems f base = do
           -- traceM $ show x
           -- traceM $ "Recursively evaluating ast"
           ast <- toAST' x
-          imp <- Base.mkImplies ctx symbol ast
+          imp <- Base.mkEq ctx symbol ast
           -- traceM $ "Asserting " ++ show ue
           Base.solverAssertCnstr ctx slv imp
           -- traceM $ "Asserted."
           return symbol
 
     outer lia = do
-      traceM $ "Compiling top LIA"
+      -- traceM $ "Compiling top LIA"
       ast <- toAST lia
+      vars <- liftIO $ readIORef var_ref
+      -- traceM $ "Variables: " ++ show (IM.size vars)
       local $ do
-        traceM $ "Asserted top LIA"
+        -- traceM $ "Asserted top LIA"
         assert ast
-        traceM $ "Checking Consistency"
+        -- traceM $ "Checking Consistency"
         rest <- check
-        traceM $ "Done"
+        -- traceM $ "Done"
         return $ rest == Sat
 
   assert =<< toAST base

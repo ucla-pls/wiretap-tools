@@ -161,7 +161,6 @@ data Deadlock = Deadlock
   } deriving (Show, Ord, Eq)
 
 
-
 instance Candidate Deadlock where
   candidateSet =
     S.map edgeFrom . deadlockCycle

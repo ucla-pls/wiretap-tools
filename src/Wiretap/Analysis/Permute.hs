@@ -230,7 +230,8 @@ phiAcq lpwr cdf mh e ref' =
   , And
     [ e ~> a
     | a <- da
-    , e /= a -- , not $ mhb mh e a
+    , e /= a
+    , not $ mhb mh e a
     ]
   ]
   where
@@ -265,7 +266,7 @@ mkCDF lm h df =
       -- If it is a branch event then we know everything after needs to be
       -- consistent
       Branch ->
-        And . map (Var) $ uthread ! ue
+        And . map (Var) $ filter onlyVars (uthread ! ue)
 
       -- Otherwise do your thing
       _ ->
@@ -282,8 +283,17 @@ mkCDF lm h df =
         Acquire l | nonreentrant lm ue' l -> ue' : cont
         Begin -> ue' : cont
         Join _ -> ue' : cont
+        -- Branch -> [ue']
         _ -> cont
     controlFlow _ [] = []
+
+    onlyVars ue' =
+      case operation . normal $ ue' of
+        Read _ _ -> True
+        Acquire l | nonreentrant lm ue' l -> True
+        Begin -> True
+        Join _ -> True
+        _ -> False
 
     uthread :: UniqueMap [UE]
     uthread = fromUniques (imapf [])
@@ -292,14 +302,10 @@ mkCDF lm h df =
 
     folder ue (threads, cont) =
       let
-        shouldAdd = True -- maybe True (nonreentrant lm ue) $ lockOf ue
         t = threadOf ue
         lst = maybe [] (ue:) $ M.lookup t threads
       in
-       if shouldAdd then
-         ( M.insert t lst threads, cont . (fmap (const lst) ue :))
-       else
-         ( threads, cont )
+       ( M.insert t lst threads, cont . (fmap (const lst) ue :))
 
 
 mkVarGenerator
@@ -329,6 +335,8 @@ mkVarGenerator _ mh cdf h =
         Write _ v ->
           cdf (fromValue v) ue
         Release _ ->
+          cdf mempty ue
+        Branch ->
           cdf mempty ue
         _ -> error $ "Wrong variable type: " ++ show e
     lpwr = lockPairsWithRef h
