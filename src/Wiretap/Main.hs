@@ -49,7 +49,7 @@ import           Wiretap.Data.Event
 import           Wiretap.Data.History
 import qualified Wiretap.Data.Program             as Program
 import           Wiretap.Analysis.DataRace
-import           Wiretap.Analysis.LIA             hiding ((~>))
+import           Wiretap.Analysis.MHL             hiding ((~>))
 import           Wiretap.Analysis.Lock
 import           Wiretap.Analysis.Permute
 import           Wiretap.Analysis.MustHappenBefore
@@ -429,7 +429,7 @@ proveCandidates config p generator toString events = do
 
     onProverError
       :: (PartialHistory h)
-      => h -> a -> LIA UE
+      => h -> a -> MHL UE
       -> IO String
     onProverError hist c cnts = do
       case outputProof config of
@@ -443,7 +443,7 @@ proveCandidates config p generator toString events = do
         Nothing -> do
           return "Could not solve constraints."
 
-    printProof (Proof c lia hist) = do
+    printProof (Proof c mhl hist) = do
       case outputProof config of
         Just folder -> do
           createDirectoryIfMissing True folder
@@ -452,7 +452,7 @@ proveCandidates config p generator toString events = do
           withFile (fn ++ ".hist") WriteMode $
             \h -> runEffect $ each hist >-> P.map normal >-> writeHistory h
           withFile (fn ++ ".dot") WriteMode $ \h ->
-            hPutStr h $ cnf2dot p hist (toCNF lia)
+            hPutStr h $ cnf2dot p hist (toCNF mhl)
         Nothing ->
           return ()
 
@@ -531,7 +531,7 @@ cnf2dot
   :: PartialHistory h
   => Program.Program
   -> h
-  -> [[LIAAtom UE UE]]
+  -> [[MHLAtom UE UE]]
   -> String
 cnf2dot p h cnf = unlines $
   [ "digraph {"

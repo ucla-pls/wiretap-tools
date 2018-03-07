@@ -5,10 +5,10 @@
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE UndecidableInstances       #-}
-module Wiretap.Analysis.LIA
-  ( LIA
-  , LIA'(..)
-  , LIAAtom (..)
+module Wiretap.Analysis.MHL
+  ( MHL
+  , MHL'(..)
+  , MHLAtom (..)
   , (~>)
   , pairwise
   , orders
@@ -19,16 +19,16 @@ module Wiretap.Analysis.LIA
   , fast
   , Z3T
 
-  , LIAError (..)
+  , MHLError (..)
   , MonadZ3
 
   , toCNF
 --  , solve
 --  , toZ3
---  , setupLIA
-  , setupLIA'
+--  , setupMHL
+  , setupMHL'
 
-  , liaSize
+  , mhlSize
   )
 where
 
@@ -50,46 +50,46 @@ import           Data.Unique
 import qualified Z3.Base                    as Base
 import           Z3.Monad
 
-{-| LIA - Linear integer arithmetic -}
-type LIA e = LIA' e e
+{-| MHL - Linear integer arithmetic -}
+type MHL e = MHL' e e
 
-data LIA' s e
+data MHL' s e
   = Order !e !e
   | Eq !e !e
-  | And !([LIA' s e])
-  | Or !([LIA' s e])
+  | And !([MHL' s e])
+  | Or !([MHL' s e])
   | Var !s
   deriving (Show)
 
-liaSize :: LIA' s e -> Integer
-liaSize lia =
-  case lia of
+mhlSize :: MHL' s e -> Integer
+mhlSize mhl =
+  case mhl of
     Order _ _ -> 1
     Eq _ _    -> 1
-    And ls    -> 1 + sum (map liaSize ls)
-    Or ls     -> 1 + sum (map liaSize ls)
+    And ls    -> 1 + sum (map mhlSize ls)
+    Or ls     -> 1 + sum (map mhlSize ls)
     Var _     -> 1
 
 infixl 8 ~>
-(~>) :: e -> e -> LIA' s e
+(~>) :: e -> e -> MHL' s e
 (~>) = Order
 
-totalOrder :: [e] -> LIA' s e
+totalOrder :: [e] -> MHL' s e
 totalOrder = And . pairwise (~>)
 
 pairwise :: (a -> a -> b) -> [a] -> [b]
 pairwise f es = zipWith f es (tail es)
 
-orders ::  [e] -> [e] -> LIA' s e
+orders ::  [e] -> [e] -> MHL' s e
 orders as bs = And [ a ~> b | a <- as, b <- bs ]
 
-data LIAAtom s e
+data MHLAtom s e
  = AOrder e e
  | AEq e e
  | AVar s
  deriving (Show)
 
-toCNF :: LIA' s e -> [[LIAAtom s e]]
+toCNF :: MHL' s e -> [[MHLAtom s e]]
 toCNF e =
   case e of
     Order a b -> [[AOrder a b]]
@@ -113,20 +113,20 @@ product :: (a -> b -> c) -> [a] -> [b] -> [c]
 product f as bs =
   [ f a b | a <- as, b <- bs ]
 
-data LIAError
-  = LIAZ3Error Z3Error
-  | LIACouldNotSolveConstraints
+data MHLError
+  = MHLZ3Error Z3Error
+  | MHLCouldNotSolveConstraints
   deriving (Show)
 
 -- {-| `setup`, takes a vector of elements and a list of symbols and setup the
 -- environment.
 -- -}
--- setupLIA
+-- setupMHL
 --   :: (MonadZ3 m, Show e)
 --   => [Unique e]
---   -> [(Int, (LIA' Int (Unique e)))]
---   -> m (LIA' Int (Unique e) -> m (Maybe [Unique e]))
--- setupLIA elems vars = do
+--   -> [(Int, (MHL' Int (Unique e)))]
+--   -> m (MHL' Int (Unique e) -> m (Maybe [Unique e]))
+-- setupMHL elems vars = do
 --   eVars <-
 --     fmap IM.fromDistinctAscList . forM elems $ \e -> do
 --       o <- mkFreshIntVar "O"
@@ -140,8 +140,8 @@ data LIAError
 --     let s = lookupSVar eVars var
 --     assert =<< mkImplies s =<< solver constraint
 
---   let outer lia = local $ do
---         assert =<< solver lia
+--   let outer mhl = local $ do
+--         assert =<< solver mhl
 --         (_, solution) <- withModel $ \m -> do
 --           solutions <- mapM (\(_, o, _) -> evalInt m o) eVars
 --           return solutions
@@ -153,13 +153,13 @@ data LIAError
 
 --   return outer
 
-setupLIA'
+setupMHL'
   :: forall m e. (MonadZ3 m, Show e)
   => [Unique e]
-  -> (Unique e -> LIA' (Unique e) (Unique e))
-  -> LIA' (Unique e) (Unique e)
-  -> m (LIA' (Unique e) (Unique e) -> m Bool)
-setupLIA' elems f base = do
+  -> (Unique e -> MHL' (Unique e) (Unique e))
+  -> MHL' (Unique e) (Unique e)
+  -> m (MHL' (Unique e) (Unique e) -> m Bool)
+setupMHL' elems f base = do
   events <-
     fmap IM.fromDistinctAscList . forM elems $ \e -> do
       o <- mkFreshRealVar "O"
@@ -170,11 +170,11 @@ setupLIA' elems f base = do
   slv <- getSolver
 
   let
-    toAST' :: LIA' (Unique e) (Unique e) -> IO AST
+    toAST' :: MHL' (Unique e) (Unique e) -> IO AST
     toAST' = toZ3 (lookupOVar events) lookupS ctx
 
-    toAST :: LIA' (Unique e) (Unique e) -> m AST
-    toAST lia = liftIO $ toAST' lia
+    toAST :: MHL' (Unique e) (Unique e) -> m AST
+    toAST mhl = liftIO $ toAST' mhl
 
     lookupS ue = do
       vars <- readIORef var_ref
@@ -190,8 +190,8 @@ setupLIA' elems f base = do
           Base.solverAssertCnstr ctx slv imp
           return symbol
 
-    outer lia = do
-      ast <- toAST lia
+    outer mhl = do
+      ast <- toAST mhl
       local $ do
         assert ast
         rest <- check
@@ -275,11 +275,11 @@ toZ3 ::
   (e -> AST)
   -> (s -> IO AST)
   -> Base.Context
-  -> LIA' s e -> IO AST
+  -> MHL' s e -> IO AST
 toZ3 evar svar ctx = go
   where
-  go lia =
-    case lia of
+  go mhl =
+    case mhl of
       And [] ->
         Base.mkTrue ctx
       And cs ->

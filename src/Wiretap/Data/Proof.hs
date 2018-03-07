@@ -9,7 +9,7 @@ import           Data.PartialOrder
 import           Data.Set             as S
 import           Data.List            as L
 import           Data.Unique
-import           Wiretap.Analysis.LIA
+import           Wiretap.Analysis.MHL
 import           Wiretap.Data.History
 import           Wiretap.Data.Program
 import           Wiretap.Data.Event
@@ -35,8 +35,8 @@ class Candidate a where
 
 data Proof a = Proof
   { candidate   :: a
-  , constraints :: LIA UE
+  , constraints :: MHL UE
   , evidence    :: [UE]
   } deriving Functor
 
-type Prover = forall h . PartialHistory h => h -> CandidateSet -> LIA UE
+type Prover = forall h . PartialHistory h => h -> CandidateSet -> MHL UE

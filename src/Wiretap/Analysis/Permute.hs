@@ -42,7 +42,7 @@ import           Data.Functor
 
 -- import  Wiretap.Format.Text
 
-import           Wiretap.Analysis.LIA
+import           Wiretap.Analysis.MHL
 import           Wiretap.Analysis.Lock
 import           Wiretap.Analysis.MustHappenBefore
 import           Wiretap.Data.Event
@@ -59,13 +59,13 @@ onlyNessary (Unique _ es) =
     Branch    -> False
     _         -> True
 
-sc :: PartialHistory h => h -> LIA UE
+sc :: PartialHistory h => h -> MHL UE
 sc h =
   And [ totalOrder $ filter onlyNessary es
       | es <- M.elems $ byThread h
       ]
 
-mhbLia :: PartialHistory h => h -> LIA UE
+mhbLia :: PartialHistory h => h -> MHL UE
 mhbLia h =
   And
   [ And
@@ -120,10 +120,10 @@ lockPairsWithRef h =
 
 phiRead
   :: M.Map Location [(Value, UE)]
-  -> (UE -> LIA UE)
+  -> (UE -> MHL UE)
   -> MHB
   -> UE -> (Location, Value)
-  -> LIA UE
+  -> MHL UE
 phiRead writes cdf mh r (l, v) =
   case M.lookup l writes of
     Nothing ->
@@ -152,11 +152,11 @@ phiRead writes cdf mh r (l, v) =
 
 phiAcq
   :: (M.Map Ref ([UE], [(UE, UE)], [UE]))
-  -> (UE -> LIA UE)
+  -> (UE -> MHL UE)
   -> MHB
   -> UE
   -> Ref
-  -> LIA UE
+  -> MHL UE
 phiAcq lpwr cdf mh e ref' =
   And
   [ And
@@ -184,18 +184,18 @@ phiAcq lpwr cdf mh e ref' =
 phiExecE
   :: CDF
   -> S.Set UE
-  -> LIA UE
+  -> MHL UE
 phiExecE cdf es =
   And $ equate es :
   [ cdf mempty e
   | e <- S.toList es
   ]
 
-equate :: CandidateSet -> LIA UE
+equate :: CandidateSet -> MHL UE
 equate es =
   And . L.map (uncurry Eq) $ combinations (S.toList es)
 
-type CDF = ValueSet -> UE -> LIA UE
+type CDF = ValueSet -> UE -> MHL UE
 type DF = ValueSet -> Value -> Bool
 
 
@@ -203,7 +203,7 @@ initEquations
   :: PartialHistory h
   => (LockMap, MHB, DF)
   -> h
-  -> (CDF, UE -> LIA UE)
+  -> (CDF, UE -> MHL UE)
 initEquations (lm, mh, df) h =
   (cdf, (vars !))
   where
@@ -288,10 +288,10 @@ permuteBatch'
   :: (PartialHistory h, MonadZ3 m, Candidate a)
   => (LockMap, MHB, DF)
   -> h
-  -> m (a -> EitherT (LIA UE) m (Proof a))
+  -> m (a -> EitherT (MHL UE) m (Proof a))
 permuteBatch' (lm, mh, df) h = do
   solver <-
-    setupLIA'
+    setupMHL'
       (filter onlyNessary $ enumerate h)
       fromVar
       (And [sc h, mhbLia h])
