@@ -34,7 +34,7 @@ dependencies:
 
 executable:
   main: Main.hs
-  source-dirs: src
+  source-dirs: app
   dependencies:
     - wiretap-tools
   ghc-options:
@@ -50,10 +50,11 @@ library:
 
 tests:
   wt-test:
-    main: Main.hs
-    source-dirs: src
+    main: Spec.hs
+    source-dirs: test-suite
     dependencies:
       - wiretap-tools
+      - hspec
     ghc-options:
       -threaded
       -funbox-strict-fields

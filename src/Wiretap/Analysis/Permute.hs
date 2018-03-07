@@ -38,6 +38,7 @@ import qualified Data.Map                          as M
 import qualified Data.Set                          as S
 import           Data.Unique
 import           Data.Monoid
+import           Data.Functor
 
 -- import  Wiretap.Format.Text
 
@@ -155,7 +156,7 @@ phiAcq
   -> MHB
   -> UE
   -> Ref
-  -> LIA' UE UE
+  -> LIA UE
 phiAcq lpwr cdf mh e ref' =
   And
   [ And
@@ -183,85 +184,30 @@ phiAcq lpwr cdf mh e ref' =
 phiExecE
   :: CDF
   -> S.Set UE
-  -> LIA' UE UE
+  -> LIA UE
 phiExecE cdf es =
   And $ equate es :
   [ cdf mempty e
   | e <- S.toList es
   ]
 
-type CDF = ValueSet -> UE -> LIA UE
-type DF = ValueSet -> Value -> Bool
-
 equate :: CandidateSet -> LIA UE
 equate es =
   And . L.map (uncurry Eq) $ combinations (S.toList es)
 
-mkCDF
+type CDF = ValueSet -> UE -> LIA UE
+type DF = ValueSet -> Value -> Bool
+
+
+initEquations
   :: PartialHistory h
-  => LockMap
+  => (LockMap, MHB, DF)
   -> h
-  -> (ValueSet -> Value -> Bool)
-  -> CDF
-mkCDF lm h df =
-  \vs ue ->
-    case operation $ normal ue of
-      -- If it is a branch event then we know everything after needs to be
-      -- consistent
-      Branch ->
-        And . map (Var) $ filter onlyVars (uthread ! ue)
-
-      -- Otherwise do your thing
-      _ ->
-        And . map (Var) $ controlFlow vs (uthread ! ue)
+  -> (CDF, UE -> LIA UE)
+initEquations (lm, mh, df) h =
+  (cdf, (vars !))
   where
-    controlFlow :: ValueSet -> [UE] -> [UE]
-    controlFlow !vs (ue':rest) =
-      let
-        vs' = vs <> valuesOf ue'
-        cont = controlFlow vs' rest
-      in
-      case operation . normal $ ue' of
-        Read _ v | df vs v -> ue' : cont
-        Acquire l | nonreentrant lm ue' l -> ue' : cont
-        Begin -> ue' : cont
-        Join _ -> ue' : cont
-        -- Branch -> [ue']
-        _ -> cont
-    controlFlow _ [] = []
-
-    onlyVars ue' =
-      case operation . normal $ ue' of
-        Read _ _ -> True
-        Acquire l | nonreentrant lm ue' l -> True
-        Begin -> True
-        Join _ -> True
-        _ -> False
-
-    uthread :: UniqueMap [UE]
-    uthread = fromUniques (imapf [])
-
-    (_, imapf) = simulate folder (M.empty, id) h
-
-    folder ue (threads, cont) =
-      let
-        t = threadOf ue
-        lst = maybe [] (ue:) $ M.lookup t threads
-      in
-       ( M.insert t lst threads, cont . (fmap (const lst) ue :))
-
-
-mkVarGenerator
-  :: PartialHistory h
-  => LockMap
-  -> MHB
-  -> CDF
-  -> h
-  -> UE -> LIA UE
-mkVarGenerator _ mh cdf h =
-  inner
-  where
-    inner ue@(Unique _ e) =
+    runVar ue@(Unique _ e) =
       case operation e of
         Read l v ->
           phiRead writes Var mh ue (l,v)
@@ -282,8 +228,61 @@ mkVarGenerator _ mh cdf h =
         Branch ->
           cdf mempty ue
         _ -> error $ "Wrong variable type: " ++ show e
-    lpwr = lockPairsWithRef h
-    writes = mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
+
+    lpwr =
+      lockPairsWithRef h
+
+    writes =
+      mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
+
+    cdf vs ue =
+      case operation $ normal ue of
+        -- If it is a branch event then we know everything after needs to be
+        -- consistent
+        Branch ->
+          And . map (Var) $ filter onlyVars (uthread ! ue)
+
+        -- Otherwise do your thing
+        _ ->
+          And . map (Var) $ controlFlow vs (uthread ! ue)
+
+    controlFlow :: ValueSet -> [UE] -> [UE]
+    controlFlow !vs (ue':rest) =
+      let
+        vs' = vs <> valuesOf ue'
+        cont = controlFlow vs' rest
+      in
+      case operation . normal $ ue' of
+        Read _ v | df vs v -> ue' : cont
+        Acquire l | nonreentrant lm ue' l -> ue' : cont
+        Begin -> ue' : cont
+        Join _ -> ue' : cont
+        -- Branch -> [ue']
+        _ -> cont
+    controlFlow _ [] = []
+
+    vars = fromUniques . map (\u -> u $> runVar u) $ enumerate h
+
+    onlyVars ue' =
+      case operation . normal $ ue' of
+        Read _ _ -> True
+        Acquire l | nonreentrant lm ue' l -> True
+        Begin -> True
+        Join _ -> True
+        _ -> False
+
+    uthread = threadAt h
+
+threadAt :: PartialHistory h => h -> UniqueMap [UE]
+threadAt h =
+  fromUniques $ snd (simulate folder (M.empty, id) h) []
+  where
+    folder ue (threads, cont) =
+      let
+        t = threadOf ue
+        lst = maybe [] (ue:) $ M.lookup t threads
+      in
+      ( M.insert t lst threads, cont . (fmap (const lst) ue :))
 
 permuteBatch'
   :: (PartialHistory h, MonadZ3 m, Candidate a)
@@ -294,7 +293,7 @@ permuteBatch' (lm, mh, df) h = do
   solver <-
     setupLIA'
       (filter onlyNessary $ enumerate h)
-      (mkVarGenerator lm mh cdf h)
+      fromVar
       (And [sc h, mhbLia h])
   return $ \a -> do
     let es = candidateSet a
@@ -304,7 +303,8 @@ permuteBatch' (lm, mh, df) h = do
     then return $ Proof a x undefined
     else left $ x
 
-  where cdf = mkCDF lm h df
+  where
+   (cdf, fromVar) = initEquations (lm, mh, df) h
 
 
 -- Dfs

@@ -5,7 +5,7 @@
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module Main where
+module Wiretap.Main where
 
 import           System.Console.Docopt
 import           System.Directory
@@ -142,11 +142,15 @@ helpNeeded args =
 
 main :: IO ()
 main = do
-  parseArgs patterns <$> getArgs >>= \case
-    Right args -> do
-      when (helpNeeded args) $ exitWithUsage patterns
-      config <- readConfig args
-      runCommand args config
+  mainWithArgs =<< getArgs
+
+mainWithArgs :: [String] -> IO ()
+mainWithArgs args =
+  case parseArgs patterns args of
+    Right args' -> do
+      when (helpNeeded args') $ exitWithUsage patterns
+      config <- readConfig args'
+      runCommand args' config
     Left err ->
       exitWithUsageMessage patterns (show err)
 
