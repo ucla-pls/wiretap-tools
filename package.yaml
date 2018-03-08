@@ -62,9 +62,9 @@ tests:
 benchmarks:
   wt-prof:
     main: Main.hs
-    source-dirs: src
+    source-dirs: app
     dependencies:
-    - wiretap-tools
+      - wiretap-tools
     ghc-options:
       -O3
       -threaded

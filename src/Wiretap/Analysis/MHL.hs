@@ -46,7 +46,7 @@ import           Control.Monad.Trans.Reader (ReaderT)
 import           Data.IORef
 import           Data.Unique
 
--- import Debug.Trace
+import Debug.Trace
 import qualified Z3.Base                    as Base
 import           Z3.Monad
 
@@ -182,16 +182,25 @@ setupMHL' elems f base = do
         Just symbol ->
           return symbol
         Nothing -> do
-          symbol <- Base.mkFreshBoolVar ctx "S"
-          writeIORef var_ref (IM.insert (idx ue) symbol vars)
-          let x = (f ue)
-          ast <- toAST' x
-          imp <- Base.mkEq ctx symbol ast
-          Base.solverAssertCnstr ctx slv imp
-          return symbol
+          let
+            mhl = (f ue)
+            msize = (mhlSize mhl)
+          if msize < 10
+            then
+              toAST' mhl
+            else do
+              -- traceM (show ue ++ " : " ++ show msize)
+              symbol <- Base.mkFreshBoolVar ctx "S"
+              writeIORef var_ref (IM.insert (idx ue) symbol vars)
+              ast <- toAST' mhl
+              imp <- Base.mkImplies ctx symbol ast
+              Base.solverAssertCnstr ctx slv imp
+              return symbol
 
     outer mhl = do
       ast <- toAST mhl
+      vars <- liftIO $ readIORef var_ref
+      traceM $ "Created " ++ show (IM.size vars) ++ " # of vars"
       local $ do
         assert ast
         rest <- check

@@ -9,7 +9,7 @@ import Data.PartialOrder
 {-| Takes elements and make them unique by assigning an identifier -}
 data Unique e = Unique
  { idx    :: !Int
- , normal :: !e
+ , normal :: e
  } deriving (Show)
 
 instance PartialOrder e => PartialOrder (Unique e) where
@@ -38,10 +38,10 @@ newtype UniqueMap a = UniqueMap
   { toIntMap :: M.IntMap a
   } deriving (Show)
 
-{-| Assumes that unique is from to  -}
+-- | Assumes that unique is from to
 fromUniques :: [Unique a] -> UniqueMap a
 fromUniques lst =
-  UniqueMap $! M.fromDistinctAscList (map toPair lst)
+  UniqueMap $ M.fromDistinctAscList (map toPair lst)
 
 (!) :: UniqueMap a -> Unique b -> a
 m ! u =

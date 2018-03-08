@@ -39,6 +39,7 @@ import qualified Data.Set                          as S
 import           Data.Unique
 import           Data.Monoid
 import           Data.Functor
+import           Data.Maybe
 
 -- import  Wiretap.Format.Text
 
@@ -125,30 +126,26 @@ phiRead
   -> UE -> (Location, Value)
   -> MHL UE
 phiRead writes cdf mh r (l, v) =
-  case M.lookup l writes of
-    Nothing ->
-      And []
-      -- ^ If no writes assume that the read is consistent, ei. Reads what it
-      -- is supposed to.
-    Just rwrites ->
-      case [ w | (v', w) <- rwrites , v' == v, not $ mhb mh r w ] of
-        [] ->
-          And [ r ~> w' | (_, w') <- rwrites]
-          -- ^ If there is no writes with the same value, that not is ordered
-          -- after the read, then assume that the read must be reading
-          -- something that was written before, ei. ordered before all other writes.
-        rvwrites ->
-          Or
-          [ And $ cdf w : w ~> r :
-            [ Or [ w' ~> w, r ~> w']
-            | (_, w') <- rwrites
-            , w' /= w
-            , not $ mhb mh w' w
-            , not $ mhb mh r w'
-            ]
-          | w <- rvwrites
-          , not $ mhb mh r w
-          ]
+  case [ w | (v', w) <- rwrites , v' == v, not $ mhb mh r w ] of
+    [] ->
+      And [ r ~> w' | (_, w') <- rwrites]
+      -- ^ If there is no writes with the same value, that not is ordered
+      -- after the read, then assume that the read must be reading
+      -- something that was written before, ei. ordered before all other writes.
+    rvwrites ->
+      Or
+      [ And $ cdf w : w ~> r :
+        [ Or [ w' ~> w, r ~> w']
+        | (_, w') <- rwrites
+        , w' /= w
+        , not $ mhb mh w' w
+        , not $ mhb mh r w'
+        ]
+      | w <- rvwrites
+      , not $ mhb mh r w
+      ]
+  where
+    rwrites = fromMaybe [] $ M.lookup l writes
 
 phiAcq
   :: (M.Map Ref ([UE], [(UE, UE)], [UE]))
@@ -261,7 +258,10 @@ initEquations (lm, mh, df) h =
         _ -> cont
     controlFlow _ [] = []
 
-    vars = fromUniques . map (\u -> u $> runVar u) $ enumerate h
+    vars =
+      fromUniques
+      . map (\u -> u $> runVar u)
+      $ enumerate h
 
     onlyVars ue' =
       case operation . normal $ ue' of
@@ -365,7 +365,6 @@ fromBranch =
   mempty { vsBranch = True }
 
 -- | Get all refs known by the event at the moment of execution.
--- TODO: Fix problem with write
 valuesOf :: UE -> ValueSet
 valuesOf (Unique _ e) =
   case operation e of

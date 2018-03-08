@@ -219,6 +219,7 @@ deadlockCandidates' h lockmap =
           go e' ( DeadlockEdge e (LockEdgeLabel l acq) e':edges) rest
 
 
+
 deadlockCandidates :: PartialHistory h
   => M.Map Thread [(Ref, UE)]
   -> h
