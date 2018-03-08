@@ -223,7 +223,7 @@ initEquations (lm, mh, df) h =
         Release _ ->
           cdf mempty ue
         Branch ->
-          cdf mempty ue
+          And . map (Var) $ filter (onlyVars (ValueSet mempty True True)) (uthread ! ue)
         _ -> error $ "Wrong variable type: " ++ show e
 
     lpwr =
@@ -233,29 +233,15 @@ initEquations (lm, mh, df) h =
       mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
 
     cdf vs ue =
-      case operation $ normal ue of
-        -- If it is a branch event then we know everything after needs to be
-        -- consistent
-        Branch ->
-          And . map (Var) $ filter onlyVars (uthread ! ue)
-
-        -- Otherwise do your thing
-        _ ->
-          And . map (Var) $ controlFlow vs (uthread ! ue)
+      And . map (Var) $ controlFlow vs (uthread ! ue)
 
     controlFlow :: ValueSet -> [UE] -> [UE]
     controlFlow !vs (ue':rest) =
-      let
-        vs' = vs <> valuesOf ue'
-        cont = controlFlow vs' rest
-      in
-      case operation . normal $ ue' of
-        Read _ v | df vs v -> ue' : cont
-        Acquire l | nonreentrant lm ue' l -> ue' : cont
-        Begin -> ue' : cont
-        Join _ -> ue' : cont
-        -- Branch -> [ue']
-        _ -> cont
+      ( case operation . normal $ ue' of
+        Branch -> const [ue']
+        _ | onlyVars vs ue' -> (ue' :)
+          | otherwise -> id
+      ) $ controlFlow (vs <> valuesOf ue') rest
     controlFlow _ [] = []
 
     vars =
@@ -263,9 +249,9 @@ initEquations (lm, mh, df) h =
       . map (\u -> u $> runVar u)
       $ enumerate h
 
-    onlyVars ue' =
+    onlyVars vs ue' =
       case operation . normal $ ue' of
-        Read _ _ -> True
+        Read _ v | df vs v -> True
         Acquire l | nonreentrant lm ue' l -> True
         Begin -> True
         Join _ -> True
