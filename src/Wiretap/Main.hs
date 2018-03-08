@@ -35,6 +35,7 @@ import           Data.Traversable                 (mapM)
 import           Data.Unique
 -- import           Data.IORef
 import           Data.Either
+import           Data.Functor
 
 -- import Debug.Trace
 
@@ -353,9 +354,9 @@ proveCandidates config p findCandidates toString events = do
         getN size = do
           catMaybes <$> PM.asList (PM.take' size)
 
-    markProven p = do
-      modify $ addProven p
-      liftIO $ putStrLn p
+    markProven prv = do
+      modify $ addProven prv
+      liftIO $ putStrLn prv
 
     chunkProver
       :: forall h. (PartialHistory h)
@@ -391,25 +392,20 @@ proveCandidates config p findCandidates toString events = do
               e <- evalZ3TWithTimeout (solveTime config) $ do
                 solver <- permuteBatch' (lm, mh, df) chunk
                 forM_ toBeProven $ \(item, cs) -> do
+                  say $ "- Trying to prove " ++  item ++ ", with "
+                       ++ show (length cs) ++ " candidates."
                   x <- solver cs
                   case x of
                     Left msg ->
                       liftIO $ do
                         e <- onProverError chunk undefined msg
-                        say e
-                    Right _ ->
+                        say $ "  - " ++ e
+                    Right pf -> do
                       lift $ markProven item
+                      liftIO $ printProof pf
               either (say . show) return $ e
         _ ->
           forM_ toBeProven (markProven . fst)
-
-    handleError c msg =
-      when (verbose config) $ do
-        hPutStrLn stderr "Could not prove candidate:"
-        hPutStr stderr "  " >> toString c >>= hPutStrLn stderr
-        hPutStrLn stderr "The reason was:"
-        msg' <- msg
-        hPutStr stderr "  " >> hPutStrLn stderr msg'
 
     onProverError
       :: (PartialHistory h)
@@ -444,68 +440,10 @@ proveCandidates config p findCandidates toString events = do
       :: forall m'. (MonadIO m', MonadState ProverState m')
       => [String]
       -> a -> m' (Either (IO String) a)
-    getFilter filterNames = filter
+    getFilter filterNames = inner
       where
-        filter c =
-          runEitherT $ do
-            sequence (map ($c) filters)
-            return c
-
-        filters :: [a -> EitherT (IO String) m' ()]
-        filters =
-          map toFilter filterNames
-
-        toFilter :: String -> a -> EitherT (IO String) m' ()
-        toFilter name c =
-          case name of
-            "lockset" -> do
-              lm <- gets lockMap
-              void $ first (\shared -> do
-                  locks <- forM shared $ \(r, (a, b)) -> do
-                    inst_a <- instruction p . normal $ a
-                    inst_b <- instruction p . normal $ b
-                    return $ L.intercalate "\n"
-                      [ "    " ++ pp p r
-                      , "      " ++ pp p inst_a
-                      , "      " ++ pp p inst_b
-                      ]
-                  return . L.intercalate "\n" $
-                    "Candidates shares locks:" : locks
-                ) $ locksetFilter' lm c
-            "mhb" -> do
-              mg <- gets mhbGraph
-              forM_ (crossproduct1 . S.toList $ candidateSet c) $ \(a, b) ->
-                if mhb mg a b
-                then left $ do
-                    inst_a <- instruction p . normal $ a
-                    inst_b <- instruction p . normal $ b
-                    return $ L.intercalate "\n"
-                      [ "Must happen before related"
-                      , "    " ++ pp p inst_a
-                      , "    " ++ pp p inst_b
-                      ]
-                else return ()
-            _ ->
-              error $ "Unknown filter " ++ name
-
-        -- "ignored" -> do
-        --   str <- liftIO $ toString c
-        --   if S.member str (ignoreSet config)
-        --     then left . return $ "In ignore set"
-        --     else return ()
-
-        -- "reject" ->
-        --   left . return $ "Rejected"
-
-        -- "unique" -> do
-        --   ss <- lift $ gets proven
-        --   if S.null ss
-        --     then return ()
-        --     else do
-        --       str <- liftIO $ toString c
-        --       if S.member str ss
-        --         then left . return $ "Already proven"
-        --         else return ()
+        inner c = runEitherT $ mapM ($c) fs $> c
+        fs = map (toFilter p config toString) filterNames
 
     getProver name =
       case name of
@@ -513,11 +451,59 @@ proveCandidates config p findCandidates toString events = do
         "dirk"         -> Just dfDirk
         "rvpredict"    -> Just dfRVPredict
         "free"         -> Just dfFree
-        -- "valuesonly"   -> Just cdfValuesOnly
-        -- "refsonly"     -> Just cdfRefsOnly
-        -- "branchonly"   -> Just cdfBranchOnly
         "none"         -> Nothing
         _              -> error $ "Unknown prover: '" ++ name ++ "'"
+
+
+
+toFilter :: (MonadIO m, Candidate t, MonadState ProverState m) =>
+  Program.Program
+  -> Config
+  -> (t -> IO String)
+  -> [Char]
+  -> t
+  -> EitherT (IO [Char]) m ()
+toFilter p config toString name c =
+  case name of
+    "lockset" -> do
+      lm <- gets lockMap
+      void $ first (\shared -> do
+          locks <- forM shared $ \(r, (a, b)) -> do
+            inst_a <- instruction p . normal $ a
+            inst_b <- instruction p . normal $ b
+            return $ L.intercalate "\n"
+              [ "    " ++ pp p r
+              , "      " ++ pp p inst_a
+              , "      " ++ pp p inst_b
+              ]
+          return . L.intercalate "\n" $
+            "Candidates shares locks:" : locks
+        ) $ locksetFilter' lm c
+    "mhb" -> do
+      mg <- gets mhbGraph
+      forM_ (crossproduct1 . S.toList $ candidateSet c) $ \(a, b) ->
+        if mhb mg a b
+        then left $ do
+            inst_a <- instruction p . normal $ a
+            inst_b <- instruction p . normal $ b
+            return $ L.intercalate "\n"
+              [ "Must happen before related"
+              , "    " ++ pp p inst_a
+              , "    " ++ pp p inst_b
+              ]
+        else return ()
+
+    "ignored" -> do
+      str <- liftIO $ toString c
+      if S.member str (ignoreSet config)
+        then left . return $ "In ignore set"
+        else return ()
+
+    "reject" ->
+      left . return $ "Rejected"
+
+    _ ->
+      error $ "Unknown filter " ++ name
 
 runAll :: (Monad m') => a -> [a -> m' a] -> m' a
 runAll a = L.foldl' (>>=) $ pure a

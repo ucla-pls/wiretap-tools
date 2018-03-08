@@ -287,9 +287,9 @@ permuteBatch' (lm, mh, df) h = do
       let batch = phiExecE cdf (candidateSet a)
       b <- solver batch
       if b
-      then return . Right $ Proof undefined batch undefined
+      then return . Right $ Proof a batch undefined
       else inner solver as
-    inner solver [] =
+    inner _ [] =
       return (Left undefined)
 
     (cdf, fromVar) = initEquations (lm, mh, df) h
