@@ -7,4 +7,4 @@ main :: IO ()
 main = hspec $ do
   describe "wiretap-tools" $ do
     it "should run on 'bufwriter'" $ do
-      W.mainWithArgs ["dataraces", "--chunk-size", "1000", "test/bufwriter/wiretap.hist"]
+      W.mainWithArgs ["dataraces", "-v", "--chunk-size", "1000", "test/bufwriter/wiretap.hist"]

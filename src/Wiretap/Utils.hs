@@ -2,6 +2,7 @@ module Wiretap.Utils where
 
 import qualified Data.List as L
 import qualified Data.Map as M
+import Data.Monoid
 import Control.Monad
 
 {-| a blackbird -}
@@ -49,7 +50,7 @@ groupUnsortedOnFst :: Ord a
   => [(a, b)]
   -> [(a, [b])]
 groupUnsortedOnFst =
-  groupUnsortedOn fst ((:[]). snd)
+  map (\(a,f) -> (a, appEndo f [])) . groupUnsortedOn fst (\(_, b) -> Endo (b:))
 
 groupUnsortedOn :: (Ord a, Monoid m)
   => (x -> a)

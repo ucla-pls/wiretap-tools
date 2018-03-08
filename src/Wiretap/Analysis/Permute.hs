@@ -27,8 +27,8 @@ module Wiretap.Analysis.Permute
 
 import           Control.Lens                      hiding (none)
 import           Control.Monad
-import           Control.Monad.Trans.Class         (lift)
-import           Control.Monad.Trans.Either
+
+
 import           Prelude                           hiding (reads)
 
 -- import qualified Data.IntMap                       as IM
@@ -274,23 +274,25 @@ permuteBatch'
   :: (PartialHistory h, MonadZ3 m, Candidate a)
   => (LockMap, MHB, DF)
   -> h
-  -> m (a -> EitherT (MHL UE) m (Proof a))
+  -> m ([a] -> m (Either (MHL UE) (Proof a)))
 permuteBatch' (lm, mh, df) h = do
   solver <-
     setupMHL'
       (filter onlyNessary $ enumerate h)
       fromVar
       (And [sc h, mhbLia h])
-  return $ \a -> do
-    let es = candidateSet a
-        x = (phiExecE cdf es)
-    b <- lift $ solver x
-    if b
-    then return $ Proof a x undefined
-    else left $ x
-
+  return $ inner solver
   where
-   (cdf, fromVar) = initEquations (lm, mh, df) h
+    inner solver (a:as) = do
+      let batch = phiExecE cdf (candidateSet a)
+      b <- solver batch
+      if b
+      then return . Right $ Proof undefined batch undefined
+      else inner solver as
+    inner solver [] =
+      return (Left undefined)
+
+    (cdf, fromVar) = initEquations (lm, mh, df) h
 
 
 -- Dfs

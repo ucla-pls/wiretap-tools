@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE BangPatterns        #-}
 {-# LANGUAGE FlexibleContexts    #-}
  {-# LANGUAGE LambdaCase          #-}
@@ -32,7 +33,8 @@ import           Data.Maybe                       (catMaybes, fromMaybe)
 import qualified Data.Set                         as S
 import           Data.Traversable                 (mapM)
 import           Data.Unique
-import           Data.IORef
+-- import           Data.IORef
+import           Data.Either
 
 -- import Debug.Trace
 
@@ -100,7 +102,6 @@ Filters are applicable to dataraces and deadlock analyses.
 
   lockset:     Remove all candidates with shared locks.
   reject:      Rejects all candidates
-  unique:      Only try to prove each candidate once
   ignored:     Don't try candidates in the ignore set
   mhb:         Do not check candidates which is must-happen-before related
 
@@ -167,7 +168,7 @@ readConfig args = do
   return $ Config
     { verbose = isPresent args $ longOption "verbose"
     , filters = splitOn ','
-        $ getArgWithDefault args "mhb,lockset,unique" (longOption "filter")
+        $ getArgWithDefault args "mhb,lockset" (longOption "filter")
     , prover = getArgWithDefault args "dirk" (longOption "prover")
     , outputProof = getLongOption "proof"
     , program = getLongOption "program"
@@ -211,21 +212,22 @@ runCommand args config = do
 
   onCommand "dataraces" $
     proveCandidates config p
-      (each . raceCandidates) $ prettyPrint p
+      (const . raceCandidates)
+      $ prettyPrint p
 
   onCommand "deadlocks" $
     proveCandidates config p (
-      \s -> do
-        lm <- lift $ gets lockMap
-        each $ deadlockCandidates' s lm
+      \h s ->
+        deadlockCandidates' h $ lockMap s
       ) $ prettyPrint p
 
   onCommand "bugs" $
     proveCandidates config p (
-      \s -> do
-        lm <- lift $ gets lockMap
-        each $ BDeadlock <$> deadlockCandidates' s lm
-        each $ BDataRace <$> raceCandidates s
+      \h s ->
+        concat
+           [ BDeadlock <$> deadlockCandidates' h (lockMap s)
+           , BDataRace <$> raceCandidates h
+           ]
       ) $ prettyPrint p
 
   where
@@ -281,19 +283,18 @@ stateFromChunck h p =
     , mhbGraph = mustHappenBefore h
     }
 
-
 type ProverT m = StateT ProverState m
 
 proveCandidates
   :: forall a m. (Candidate a, Show a, Ord a, MonadIO m, MonadCatch m)
   => Config
   -> Program.Program
-  -> (forall h m'. (PartialHistory h, MonadState ProverState m') => h -> Producer a m' ())
+  -> (forall h. PartialHistory h => h -> ProverState -> [a])
   -> (a -> IO String)
   -> Producer Event m ()
   -> m ()
-proveCandidates config p generator toString events = do
-  liftIO . dbg $ "Filters: " ++ show (filters config)
+proveCandidates config p findCandidates toString events = do
+  say $ "Filters: " ++ show (filters config)
   runEffect $ uniqueEvents >-> PL.evalStateP initialState proverPipe
 
   where
@@ -302,8 +303,8 @@ proveCandidates config p generator toString events = do
 
     logV = hPutStrLn stderr
 
-    dbg :: String -> IO ()
-    dbg = when (verbose config) . logV
+    say :: forall m'. (MonadIO m') => String -> m' ()
+    say = when (verbose config) . liftIO . logV
 
     uniqueEvents =
        PM.finite' (events >-> PM.scan' (\i e -> (i+1, Unique i e)) 0)
@@ -327,7 +328,6 @@ proveCandidates config p generator toString events = do
 
         go size chunk = do
           !ls <- lift $ gets lockState
-          liftIO . logV $ case chunk of a:_ -> "At event " ++ show (idx a); _ -> []
           liftIO . when (verbose config) $
             case chunk of
                 a:_ -> do
@@ -342,7 +342,7 @@ proveCandidates config p generator toString events = do
           yield chunk
           if actualChunkSize < size
             then
-              liftIO . dbg $ "Done"
+              say $ "Done"
             else do
               new <- getN offset
               let (dropped, remainder) = splitAt offset chunk
@@ -353,30 +353,55 @@ proveCandidates config p generator toString events = do
         getN size = do
           catMaybes <$> PM.asList (PM.take' size)
 
+    markProven p = do
+      modify $ addProven p
+      liftIO $ putStrLn p
+
     chunkProver
       :: forall h. (PartialHistory h)
       => h
       -> StateT ProverState m ()
     chunkProver chunk = do
+      -- Find candidates
+      candidates <- findCandidates chunk <$> get
+      say $ "Found " ++ show (length candidates) ++ " candidate(s)."
+
+      -- First we apply filters
+      let fs = getFilter (filters config)
+      (_, real) <- partitionEithers <$> mapM fs candidates
+      say $ "- after filter: " ++ show (length real)
+
+      -- The we group the results by name.
+      realByBug <- liftIO $ groupUnsortedOnFst <$> mapM (\c -> (,c) <$> toString c) real
+      say $ "- distinct: " ++ show (length realByBug)
+
+      -- And remove any that have been proved before
+      ps <- gets proven
+      let toBeProven = filter (not . (`S.member` ps) . fst) realByBug
+      say $ "- not proven: " ++ show (length toBeProven)
+
+      lm <- gets lockMap
+      mh <- gets mhbGraph
+
+      -- Then we start a batch prover, where we prove group in order, reporting
+      -- anything we find
       case getProver (prover config) of
-        Nothing -> do
-          foreachCandidate chunk $ \c -> do
-            result <- runEitherT $ mapM ($ c) $ map getFilter (filters config)
-            case result of
-              Left msg -> liftIO $ handleError c msg
-              Right _ -> do
-                str <- liftIO . toString $ c
-                modify $ addProven str
-                liftIO . putStrLn $ str
-        Just cdf -> do
-          lm <- gets lockMap
-          mh <- gets mhbGraph
-          e <- evalZ3TWithTimeout (solveTime config) (solveChunk lm mh cdf chunk)
-          case e of
-            Right x ->
-              return x
-            Left msg ->
-              liftIO . logV $ show msg
+        Just df
+          | length toBeProven > 0 -> do
+              e <- evalZ3TWithTimeout (solveTime config) $ do
+                solver <- permuteBatch' (lm, mh, df) chunk
+                forM_ toBeProven $ \(item, cs) -> do
+                  x <- solver cs
+                  case x of
+                    Left msg ->
+                      liftIO $ do
+                        e <- onProverError chunk undefined msg
+                        say e
+                    Right _ ->
+                      lift $ markProven item
+              either (say . show) return $ e
+        _ ->
+          forM_ toBeProven (markProven . fst)
 
     handleError c msg =
       when (verbose config) $ do
@@ -385,47 +410,6 @@ proveCandidates config p generator toString events = do
         hPutStrLn stderr "The reason was:"
         msg' <- msg
         hPutStr stderr "  " >> hPutStrLn stderr msg'
-
-    foreachCandidate
-      :: (PartialHistory h, MonadState ProverState m')
-      => h
-      -> (a -> m' ())
-      -> m' ()
-    foreachCandidate chunk fm =
-      runEffect . for (generator chunk) $ \c -> lift $ fm c
-
-    solveChunk
-      :: (PartialHistory h, MonadIO m', MonadState ProverState m')
-      => LockMap
-      -> MHB
-      -> DF
-      -> h
-      -> Z3T m' ()
-    solveChunk lm mh df chunk = do
-      r <- liftIO $ newIORef Nothing
-      foreachCandidate chunk $ \c -> do
-        r' <- lift $ runEitherT (mapM_ ($ c) $ map getFilter (filters config))
-        result <- fast $ runEitherT $ do
-            hoistEither r'
-            msolver <- lift . lift $ readIORef r
-            solver <- case msolver of
-              Just solver -> return $ solver
-              Nothing -> do
-                -- liftIO . logV $ "Computing initial solver"
-                liftIO $ logV "Computing initial solver:"
-                solver <- lift $ permuteBatch' (lm, mh, df) chunk
-                liftIO $ writeIORef r (Just solver)
-                liftIO $ logV  "done."
-                return $ solver
-            first (onProverError chunk c) $ solver c
-        case result of
-          Left msg -> liftIO $ handleError c msg
-          Right proof -> do
-            str <- liftIO . toString $ candidate proof
-            lift . modify $ addProven str
-            liftIO $ do
-              putStrLn $ str
-              printProof proof
 
     onProverError
       :: (PartialHistory h)
@@ -457,60 +441,71 @@ proveCandidates config p generator toString events = do
           return ()
 
     getFilter
-      :: (MonadIO m', MonadState ProverState m')
-      => String
-      -> a
-      -> EitherT (IO String) m' ()
-    getFilter name c =
-      case name of
-        "lockset" -> do
-          lm <- gets lockMap
-          void $ first (\shared -> do
-              locks <- forM shared $ \(r, (a, b)) -> do
-                inst_a <- instruction p . normal $ a
-                inst_b <- instruction p . normal $ b
-                return $ L.intercalate "\n"
-                  [ "    " ++ pp p r
-                  , "      " ++ pp p inst_a
-                  , "      " ++ pp p inst_b
-                  ]
-              return . L.intercalate "\n" $
-                "Candidates shares locks:" : locks
-            ) $ locksetFilter' lm c
-        "mhb" -> do
-          mg <- gets mhbGraph
-          forM_ (crossproduct1 . S.toList $ candidateSet c) $ \(a, b) ->
-             if mhb mg a b
-             then left $ do
-                inst_a <- instruction p . normal $ a
-                inst_b <- instruction p . normal $ b
-                return $ L.intercalate "\n"
-                  [ "Must happen before related"
-                  , "    " ++ pp p inst_a
-                  , "    " ++ pp p inst_b
-                  ]
-             else return ()
+      :: forall m'. (MonadIO m', MonadState ProverState m')
+      => [String]
+      -> a -> m' (Either (IO String) a)
+    getFilter filterNames = filter
+      where
+        filter c =
+          runEitherT $ do
+            sequence (map ($c) filters)
+            return c
 
-        "ignored" -> do
-          str <- liftIO $ toString c
-          if S.member str (ignoreSet config)
-            then left . return $ "In ignore set"
-            else return ()
+        filters :: [a -> EitherT (IO String) m' ()]
+        filters =
+          map toFilter filterNames
 
-        "reject" ->
-          left . return $ "Rejected"
-
-        "unique" -> do
-          ss <- lift $ gets proven
-          if S.null ss
-            then return ()
-            else do
-              str <- liftIO $ toString c
-              if S.member str ss
-                then left . return $ "Already proven"
+        toFilter :: String -> a -> EitherT (IO String) m' ()
+        toFilter name c =
+          case name of
+            "lockset" -> do
+              lm <- gets lockMap
+              void $ first (\shared -> do
+                  locks <- forM shared $ \(r, (a, b)) -> do
+                    inst_a <- instruction p . normal $ a
+                    inst_b <- instruction p . normal $ b
+                    return $ L.intercalate "\n"
+                      [ "    " ++ pp p r
+                      , "      " ++ pp p inst_a
+                      , "      " ++ pp p inst_b
+                      ]
+                  return . L.intercalate "\n" $
+                    "Candidates shares locks:" : locks
+                ) $ locksetFilter' lm c
+            "mhb" -> do
+              mg <- gets mhbGraph
+              forM_ (crossproduct1 . S.toList $ candidateSet c) $ \(a, b) ->
+                if mhb mg a b
+                then left $ do
+                    inst_a <- instruction p . normal $ a
+                    inst_b <- instruction p . normal $ b
+                    return $ L.intercalate "\n"
+                      [ "Must happen before related"
+                      , "    " ++ pp p inst_a
+                      , "    " ++ pp p inst_b
+                      ]
                 else return ()
-        _ ->
-          error $ "Unknown filter " ++ name
+            _ ->
+              error $ "Unknown filter " ++ name
+
+        -- "ignored" -> do
+        --   str <- liftIO $ toString c
+        --   if S.member str (ignoreSet config)
+        --     then left . return $ "In ignore set"
+        --     else return ()
+
+        -- "reject" ->
+        --   left . return $ "Rejected"
+
+        -- "unique" -> do
+        --   ss <- lift $ gets proven
+        --   if S.null ss
+        --     then return ()
+        --     else do
+        --       str <- liftIO $ toString c
+        --       if S.member str ss
+        --         then left . return $ "Already proven"
+        --         else return ()
 
     getProver name =
       case name of
