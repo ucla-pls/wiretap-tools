@@ -29,6 +29,24 @@ crossproduct1 :: [a] -> [(a, a)]
 crossproduct1 l =
   crossproduct l l
 
+-- | Group every element in the list in pairs, fails
+-- if the list does not contain at least one element
+pairwise :: (a -> a -> b) -> [a] -> [b]
+pairwise f es = zipWith f es (tail es)
+
+
+combinate :: ([a] -> [a] -> [a]) -> [[a]] -> [a]
+combinate f l =
+  case l of
+    a':[] -> a'
+    a':as -> f a' $ combinate f as
+    []    -> []
+
+product :: (a -> b -> c) -> [a] -> [b] -> [c]
+product f as bs =
+  [ f a b | a <- as, b <- bs ]
+
+
 groupOnFst :: Eq a
   => [(a, b)]
   -> [(a, [b])]

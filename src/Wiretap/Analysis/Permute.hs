@@ -11,88 +11,34 @@ module Wiretap.Analysis.Permute
   -- , cdfRefsOnly
   -- , cdfBranchOnly
   -- , cdfValuesOnly
-
   , DF
   , CDF
 
-  , permuteBatch'
+  , PermuteProblem (..)
+  , generateProblem
+  , solveOne
 
   , Candidate(..)
-  , Proof(..)
-
-  , (~/>)
-  , (~/~)
   )
   where
 
 import           Control.Lens                      hiding (none)
 import           Control.Monad
-
-
-import           Prelude                           hiding (reads)
-
--- import qualified Data.IntMap                       as IM
-import qualified Data.List                         as L
+import           Data.Functor
 import qualified Data.Map                          as M
--- import           Data.Maybe                        (catMaybes)
+import           Data.Maybe
+import           Data.Monoid
 import qualified Data.Set                          as S
 import           Data.Unique
-import           Data.Monoid
-import           Data.Functor
-import           Data.Maybe
+import           Prelude                           hiding (reads)
 
--- import  Wiretap.Format.Text
-
-import           Wiretap.Analysis.MHL
+import           Wiretap.Analysis.HBL
 import           Wiretap.Analysis.Lock
 import           Wiretap.Analysis.MustHappenBefore
 import           Wiretap.Data.Event
 import           Wiretap.Data.History
 import           Wiretap.Data.Proof
 import           Wiretap.Utils
-
--- import           Debug.Trace
-
-onlyNessary :: UE -> Bool
-onlyNessary (Unique _ es) =
-  case operation es of
-    Enter _ _ -> False
-    Branch    -> False
-    _         -> True
-
-sc :: PartialHistory h => h -> MHL UE
-sc h =
-  And [ totalOrder $ filter onlyNessary es
-      | es <- M.elems $ byThread h
-      ]
-
-mhbLia :: PartialHistory h => h -> MHL UE
-mhbLia h =
-  And
-  [ And
-    [ And
-      [ f ~> b
-      | f <- forks, b <- begins
-      ]
-    , And
-      [ e ~> j
-      | e <- ends, j <- joins
-      ]
-    ]
-  | (joins, forks, begins, ends) <- mhbEventsByThread
-  ]
-  where
-    mhbEventsByThread =
-      M.elems $ simulate step M.empty h
-    step u@(Unique _ e) =
-      case operation e of
-        Join t -> update u _1 t
-        Fork t -> update u _2 t
-        Begin  -> update u _3 $ thread e
-        End    -> update u _4 $ thread e
-        _      -> id
-    update u l =
-      updateDefault ([], [], [], []) (over l (u:))
 
 lockPairsWithRef
   :: PartialHistory h
@@ -121,10 +67,10 @@ lockPairsWithRef h =
 
 phiRead
   :: M.Map Location [(Value, UE)]
-  -> (UE -> MHL UE)
+  -> (UE -> HBL UE)
   -> MHB
   -> UE -> (Location, Value)
-  -> MHL UE
+  -> HBL UE
 phiRead writes cdf mh r (l, v) =
   case [ w | (v', w) <- rwrites , v' == v, not $ mhb mh r w ] of
     [] ->
@@ -149,11 +95,11 @@ phiRead writes cdf mh r (l, v) =
 
 phiAcq
   :: (M.Map Ref ([UE], [(UE, UE)], [UE]))
-  -> (UE -> MHL UE)
+  -> (UE -> HBL UE)
   -> MHB
   -> UE
   -> Ref
-  -> MHL UE
+  -> HBL UE
 phiAcq lpwr cdf mh e ref' =
   And
   [ And
@@ -181,38 +127,87 @@ phiAcq lpwr cdf mh e ref' =
 phiExecE
   :: CDF
   -> S.Set UE
-  -> MHL UE
+  -> HBL UE
 phiExecE cdf es =
-  And $ equate es :
+  And $ concurrent es :
   [ cdf mempty e
   | e <- S.toList es
   ]
 
-equate :: CandidateSet -> MHL UE
-equate es =
-  And . L.map (uncurry Eq) $ combinations (S.toList es)
-
-type CDF = ValueSet -> UE -> MHL UE
+type CDF = ValueSet -> UE -> HBL UE
 type DF = ValueSet -> Value -> Bool
 
+mhb_ :: PartialHistory h => h -> HBL UE
+mhb_ h =
+  And
+  [ And
+    [ And
+      [ f ~> b
+      | f <- forks, b <- begins
+      ]
+    , And
+      [ e ~> j
+      | e <- ends, j <- joins
+      ]
+    ]
+  | (joins, forks, begins, ends) <- mhbEventsByThread
+  ]
+  where
+    mhbEventsByThread =
+      M.elems $ simulate step M.empty h
+    step u@(Unique _ e) =
+      case operation e of
+        Join t -> update u _1 t
+        Fork t -> update u _2 t
+        Begin  -> update u _3 $ thread e
+        End    -> update u _4 $ thread e
+        _      -> id
+    update u l =
+      updateDefault ([], [], [], []) (over l (u:))
 
-initEquations
-  :: PartialHistory h
+
+solveOne
+  :: (HBLSolver UE UE m)
+  => PermuteProblem a
+  -> [a]
+  -> m (Maybe a)
+solveOne p (a:as) = do
+  b <- sat (generate p a)
+  if b then return $ Just a else solveOne p as
+solveOne _ [] =
+  return Nothing
+
+data PermuteProblem a = PermuteProblem
+  { generate :: a -> HBL UE
+  , base     :: HBL UE
+  , varDef   :: UE -> HBL UE
+  }
+
+generateProblem ::
+  (PartialHistory h, Candidate a)
   => (LockMap, MHB, DF)
   -> h
-  -> (CDF, UE -> MHL UE)
-initEquations (lm, mh, df) h =
-  (cdf, (vars !))
+  -> PermuteProblem a
+generateProblem (lm, mh, df) h' =
+  PermuteProblem
+    { generate = phiExecE cdf . candidateSet
+    , base = And [sc, mhb_ h]
+    , varDef = (vars !)
+    }
   where
+    h = h'
+
+    var = Atom . Var
+
     runVar ue@(Unique _ e) =
       case operation e of
         Read l v ->
-          phiRead writes Var mh ue (l,v)
+          phiRead writes var mh ue (l,v)
         Acquire l ->
-          phiAcq lpwr Var mh ue l
+          phiAcq lpwr var mh ue l
         Begin ->
           case mhbForkOf mh ue of
-            Just f -> cdf mempty f
+            Just f  -> cdf mempty f
             Nothing -> And []
         Join t' ->
           case mhbEndOf mh t' of
@@ -223,8 +218,11 @@ initEquations (lm, mh, df) h =
         Release _ ->
           cdf mempty ue
         Branch ->
-          And . map (Var) $ filter (onlyVars (ValueSet mempty True True)) (uthread ! ue)
+          And . map (var) $ filter (onlyVars (ValueSet mempty True True)) (uthread ! ue)
         _ -> error $ "Wrong variable type: " ++ show e
+
+    sc =
+      And [ totalOrder t | t <- M.elems $ byThread h ]
 
     lpwr =
       lockPairsWithRef h
@@ -233,7 +231,7 @@ initEquations (lm, mh, df) h =
       mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
 
     cdf vs ue =
-      And . map (Var) $ controlFlow vs (uthread ! ue)
+      And . map var $ controlFlow vs (uthread ! ue)
 
     controlFlow :: ValueSet -> [UE] -> [UE]
     controlFlow !vs (ue':rest) =
@@ -251,11 +249,11 @@ initEquations (lm, mh, df) h =
 
     onlyVars vs ue' =
       case operation . normal $ ue' of
-        Read _ v | df vs v -> True
+        Read _ v  | df vs v -> True
         Acquire l | nonreentrant lm ue' l -> True
-        Begin -> True
-        Join _ -> True
-        _ -> False
+        Begin     -> True
+        Join _    -> True
+        _         -> False
 
     uthread = threadAt h
 
@@ -269,32 +267,6 @@ threadAt h =
         lst = maybe [] (ue:) $ M.lookup t threads
       in
       ( M.insert t lst threads, cont . (fmap (const lst) ue :))
-
-permuteBatch'
-  :: (PartialHistory h, MonadZ3 m, Candidate a)
-  => (LockMap, MHB, DF)
-  -> h
-  -> m ([a] -> m (Either (MHL UE) (Proof a)))
-permuteBatch' (lm, mh, df) h = do
-  solver <-
-    setupMHL'
-      (filter onlyNessary $ enumerate h)
-      fromVar
-      (And [sc h, mhbLia h])
-  return $ inner solver
-  where
-    inner solver (a:as) = do
-      let batch = phiExecE cdf (candidateSet a)
-      b <- solver batch
-      if b
-      then return . Right $ Proof a batch undefined
-      else inner solver as
-    inner _ [] =
-      return (Left undefined)
-
-    (cdf, fromVar) = initEquations (lm, mh, df) h
-
-
 -- Dfs
 
 dfFree :: DF
@@ -310,9 +282,9 @@ dfRVPredict (ValueSet refs hasValue hasBranch) _ =
 dfDirk :: DF
 dfDirk (ValueSet refs hasValue hasBranch) v =
   case v of
-    _ | hasValue || hasBranch -> True
+    _           | hasValue || hasBranch -> True
     (Object v') | Ref v' `S.member` refs -> True
-    _ -> False
+    _           -> False
 
 
 -- The value set.

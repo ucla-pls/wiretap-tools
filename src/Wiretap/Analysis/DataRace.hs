@@ -14,9 +14,9 @@ import           Data.Unique
 
 import Control.Monad (liftM2)
 
-import           Wiretap.Analysis.Permute
 import           Wiretap.Data.Event
 import           Wiretap.Data.History
+import           Wiretap.Data.Proof
 import           Wiretap.Utils
 
 sharedLocations :: PartialHistory h

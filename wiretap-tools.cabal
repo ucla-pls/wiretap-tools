@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: de9bca99b5d70b0ebc5db6a1d390632ce50fb7d86039d96b8370457c6bda56ac
+-- hash: 1746884ab6b1bd973b2f10efa9029a0fca314277a8e5020dd7b8423f3391f668
 
 name:           wiretap-tools
 version:        0.1.0.0
@@ -53,9 +53,10 @@ library
       Wiretap.Analysis.Count
       Wiretap.Analysis.DataRace
       Wiretap.Analysis.Group
+      Wiretap.Analysis.HBL
+      Wiretap.Analysis.HBL.Z3
       Wiretap.Analysis.Linearize
       Wiretap.Analysis.Lock
-      Wiretap.Analysis.MHL
       Wiretap.Analysis.MustHappenBefore
       Wiretap.Analysis.Permute
       Wiretap.Data.Event

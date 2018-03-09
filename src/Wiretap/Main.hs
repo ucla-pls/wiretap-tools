@@ -9,7 +9,7 @@
 module Wiretap.Main where
 
 import           System.Console.Docopt
-import           System.Directory
+-- import           System.Directory
 import           System.Environment               (getArgs)
 import           System.FilePath
 import           System.IO
@@ -52,7 +52,9 @@ import           Wiretap.Data.Event
 import           Wiretap.Data.History
 import qualified Wiretap.Data.Program             as Program
 import           Wiretap.Analysis.DataRace
-import           Wiretap.Analysis.MHL             hiding ((~>))
+import           Wiretap.Analysis.HBL
+import           Wiretap.Analysis.HBL.Z3
+import           Wiretap.Data.Proof
 import           Wiretap.Analysis.Lock
 import           Wiretap.Analysis.Permute
 import           Wiretap.Analysis.MustHappenBefore
@@ -389,52 +391,51 @@ proveCandidates config p findCandidates toString events = do
       case getProver (prover config) of
         Just df
           | length toBeProven > 0 -> do
-              e <- evalZ3TWithTimeout (solveTime config) $ do
-                solver <- permuteBatch' (lm, mh, df) chunk
+              let problem = generateProblem (lm, mh, df) chunk
+              e <- runLIASolver (solveTime config) (varDef problem) $ do
+                assert (base problem)
                 forM_ toBeProven $ \(item, cs) -> do
                   say $ "- Trying to prove " ++  item ++ ", with "
                        ++ show (length cs) ++ " candidates."
-                  x <- solver cs
+                  x <- solveOne problem cs
                   case x of
-                    Left msg ->
-                      liftIO $ do
-                        e <- onProverError chunk undefined msg
-                        say $ "  - " ++ e
-                    Right pf -> do
+                    Nothing ->
+                      say "  - Could not prove constraints."
+                    Just _ -> do
                       lift $ markProven item
-                      liftIO $ printProof pf
+                      -- liftIO $ printProof pf
               either (say . show) return $ e
         _ ->
           forM_ toBeProven (markProven . fst)
 
-    onProverError
-      :: (PartialHistory h)
-      => h -> a -> MHL UE
-      -> IO String
-    onProverError hist c cnts = do
-      case outputProof config of
-        Just folder -> do
-          createDirectoryIfMissing True folder
-          let ls = map (show . idx) . L.sort . S.toList $ candidateSet c
-              file = folder </> (L.intercalate "-" ls ++ ".err.dot")
-          withFile file WriteMode $ \h ->
-            hPutStr h $ cnf2dot p hist (toCNF cnts)
-          return $ "Could solve constraints, outputted to '" ++ file ++ "'"
-        Nothing -> do
-          return "Could not solve constraints."
+    -- onProverError
+    --   :: (PartialHistory h)
+    --   => h -> a -> HBL UE
+    --   -> IO String
+    -- onProverError hist c cnts = do
+    --   case outputProof config of
+    --     Just folder -> do
+    --       createDirectoryIfMissing True folder
+    --       let ls = map (show . idx) . L.sort . S.toList $ candidateSet c
+    --           file = folder </> (L.intercalate "-" ls ++ ".err.dot")
+    --       withFile file WriteMode $ \h ->
+    --         hPutStr h $ cnf2dot p hist (toCNF cnts)
+    --       return $ "Could solve constraints, outputted to '" ++ file ++ "'"
+    --     Nothing -> do
+    --       return "Could not solve constraints."
 
-    printProof (Proof c mhl hist) = do
-      case outputProof config of
-        Just folder -> do
-          createDirectoryIfMissing True folder
-          let ls = map (show . idx) . L.sort . S.toList $ candidateSet c
-          let fn = folder </> L.intercalate "-" ls
-          withFile (fn ++ ".hist") WriteMode $
-            \h -> runEffect $ each hist >-> P.map normal >-> writeHistory h
-          withFile (fn ++ ".dot") WriteMode $ \h ->
-            hPutStr h $ cnf2dot p hist (toCNF mhl)
-        Nothing ->
-          return ()
+    -- printProof (Proof c hbl hist) = do
+    --   case outputProof config of
+    --     Just folder -> do
+    --       createDirectoryIfMissing True folder
+    --       let ls = map (show . idx) . L.sort . S.toList $ candidateSet c
+    --       let fn = folder </> L.intercalate "-" ls
+    --       withFile (fn ++ ".hist") WriteMode $
+    --         \h -> runEffect $ each hist >-> P.map normal >-> writeHistory h
+    --       withFile (fn ++ ".dot") WriteMode $ \h ->
+    --         hPutStr h $ cnf2dot p hist (toCNF hbl)
+    --     Nothing ->
+    --       return ()
 
     getFilter
       :: forall m'. (MonadIO m', MonadState ProverState m')
@@ -512,7 +513,7 @@ cnf2dot
   :: PartialHistory h
   => Program.Program
   -> h
-  -> [[MHLAtom UE UE]]
+  -> [[HBLAtom UE UE]]
   -> String
 cnf2dot p h cnf = unlines $
   [ "digraph {"
@@ -538,12 +539,12 @@ cnf2dot p h cnf = unlines $
     events = S.fromList (Wiretap.Data.History.enumerate h)
     printAtom color constrain atom =
       case atom of
-        AOrder a b | a `S.member` events &&  b `S.member` events ->
+        Order a b | a `S.member` events &&  b `S.member` events ->
            "\"" ++ pr a ++ "\" -> \"" ++ pr b ++ "\" "
            ++ if constrain
               then ";"
               else "[ style=dashed, color=\"" ++ color ++ "\"];"
-        AEq a b ->
+        Concur a b ->
              "\"" ++ pr a ++ "\" -> \"" ++ pr b ++ "\"; "
           ++ "\"" ++ pr b ++ "\" -> \"" ++ pr a ++ "\""
         _ -> ""
