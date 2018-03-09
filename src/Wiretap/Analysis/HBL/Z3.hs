@@ -80,12 +80,10 @@ runSolver :: (MonadCatch m, MonadIO m)
   -> m (Either Z3Error a)
 runSolver solver (Z3T s) = do
   env <- liftIO $ newEnvC (z3sLogic solver) opts
---  (Right <$> runReaderT s (env, solver)) `catch` (return . Left)
-  Right <$> runReaderT s (env, solver)
+  (Right <$> runReaderT s (env, solver)) `catch` (return . Left)
   where
     opts =
-      (stdOpts)
-      +? if timeout > 0
+      (stdOpts) +? if timeout > 0
          then (opt "timeout" timeout)
          else mempty
 
@@ -160,8 +158,6 @@ mkLIASolver timeout f = do
                 ast <- toZ3 ctx (fromAtom eref vref env) hbl
                 imp <- Base.mkImplies ctx symbol ast
                 Base.solverAssertCnstr ctx slv imp
-                -- Base.solverAssertAndTrack ctx slv ast symbol
-                -- -- _ <- Base.solverCheck ctx slv
                 return ()
               )
 
