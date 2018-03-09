@@ -82,8 +82,8 @@ phiRead writes cdf mh r (l, v) =
       Or
       [ And $ cdf w : w ~> r :
         [ Or [ w' ~> w, r ~> w']
-        | (_, w') <- rwrites
-        , w' /= w
+        | (v', w') <- rwrites
+        , w' /= w, v /= v'
         , not $ mhb mh w' w
         , not $ mhb mh r w'
         ]
