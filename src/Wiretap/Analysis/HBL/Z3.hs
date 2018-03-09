@@ -58,7 +58,7 @@ data Z3HBLSolver s e = Z3HBLSolver
   , z3sTimeout :: Integer
   }
 
-toZ3 :: Z3.Context -> (HBLAtom s e -> IO AST) -> HBL' s e -> IO AST
+toZ3 :: Z3.Context -> (HBLAtom s e -> IO AST) -> HBL' s e -> IO (AST)
 toZ3 ctx toAST = go
   where
     go hbl =
@@ -86,8 +86,8 @@ runSolver solver (Z3T s) = do
     opts =
       (stdOpts)
       +? if timeout > 0
-        then (opt "timeout" timeout)
-        else mempty
+         then (opt "timeout" timeout)
+         else mempty
 
     timeout = z3sTimeout solver
 
@@ -158,10 +158,10 @@ mkLIASolver timeout f = do
               ( symbol
               , do
                 ast <- toZ3 ctx (fromAtom eref vref env) hbl
-                -- imp <- Base.mkImplies ctx symbol ast
-                -- Base.solverAssertCnstr ctx slv imp
-                Base.solverAssertAndTrack ctx slv ast symbol
-                -- _ <- Base.solverCheck ctx slv
+                imp <- Base.mkImplies ctx symbol ast
+                Base.solverAssertCnstr ctx slv imp
+                -- Base.solverAssertAndTrack ctx slv ast symbol
+                -- -- _ <- Base.solverCheck ctx slv
                 return ()
               )
 
