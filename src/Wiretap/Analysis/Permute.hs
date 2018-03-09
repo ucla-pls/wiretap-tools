@@ -17,6 +17,7 @@ module Wiretap.Analysis.Permute
   , PermuteProblem (..)
   , generateProblem
   , solveOne
+  , solveAll
 
   , Candidate(..)
   )
@@ -82,8 +83,8 @@ phiRead writes cdf mh r (l, v) =
       Or
       [ And $ cdf w : w ~> r :
         [ Or [ w' ~> w, r ~> w']
-        | (v', w') <- rwrites
-        , w' /= w, v /= v'
+        | (_, w') <- rwrites
+        , w' /= w
         , not $ mhb mh w' w
         , not $ mhb mh r w'
         ]
@@ -165,6 +166,14 @@ mhb_ h =
     update u l =
       updateDefault ([], [], [], []) (over l (u:))
 
+solveAll
+  :: (HBLSolver UE UE m)
+  => PermuteProblem a
+  -> [a]
+  -> m (Maybe [a])
+solveAll p as = do
+  b <- sat . Or $ map (generate p) as
+  return $ if b then Just as else Nothing
 
 solveOne
   :: (HBLSolver UE UE m)

@@ -65,10 +65,14 @@ toZ3 ctx toAST = go
       case hbl of
         And [] ->
           Base.mkTrue ctx
+        And [c] ->
+          go c
         And cs ->
           Base.mkAnd ctx =<< mapM go cs
         Or [] ->
           Base.mkFalse ctx
+        Or [c] ->
+          go c
         Or cs ->
           Base.mkOr ctx =<< mapM go cs
         Atom at ->
