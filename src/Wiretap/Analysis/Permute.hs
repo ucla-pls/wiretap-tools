@@ -55,7 +55,7 @@ lockPairsWithRef h =
             []    -> (dr, pairs, u:da)
             [r]   -> ([], (u, r):pairs, da)
             _:dr' -> (dr', pairs, da)
-            -- ^ Do not report reentrant locks
+            -- Do not report reentrant locks
         Release _ ->
           (u:dr, pairs, da)
         _ -> s
@@ -76,7 +76,7 @@ phiRead writes cdf mh r (l, v) =
   case [ w | (v', w) <- rwrites , v' == v, not $ mhb mh r w ] of
     [] ->
       And [ r ~> w' | (_, w') <- rwrites]
-      -- ^ If there is no writes with the same value, that not is ordered
+      -- If there is no writes with the same value, that not is ordered
       -- after the read, then assume that the read must be reading
       -- something that was written before, ei. ordered before all other writes.
     rvwrites ->
