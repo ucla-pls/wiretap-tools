@@ -392,8 +392,9 @@ proveCandidates config p findCandidates toString events = do
         Just df
           | length toBeProven > 0 -> do
               let problem = generateProblem (lm, mh, df) chunk
-              e <- runLIASolver (solveTime config) (varDef problem) $ do
-                assert (base problem)
+              say $ "- Ordering " ++ (show $ length (probEvents problem)) ++ " number of events!"
+              e <- runLIASolver (solveTime config) (probVarDef problem) $ do
+                assert (probBase problem)
                 forM_ toBeProven $ \(item, cs) -> do
                   say $ "- Trying to prove " ++  item ++ ", with "
                        ++ show (length cs) ++ " candidates."

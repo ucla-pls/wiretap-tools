@@ -88,7 +88,7 @@ runSolver solver (Z3T s) = do
   where
     opts =
       (stdOpts) +? if timeout > 0
-         then (opt "timeout" timeout)
+         then (opt "rlimit" timeout)
          else mempty
 
     timeout = z3sTimeout solver

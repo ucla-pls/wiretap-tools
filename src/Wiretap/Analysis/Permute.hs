@@ -172,7 +172,7 @@ solveAll
   -> [a]
   -> m (Maybe [a])
 solveAll p as = do
-  b <- sat . Or $ map (generate p) as
+  b <- sat . Or $ map (probGenerate p) as
   return $ if b then Just as else Nothing
 
 solveOne
@@ -181,15 +181,16 @@ solveOne
   -> [a]
   -> m (Maybe a)
 solveOne p (a:as) = do
-  b <- sat (generate p a)
+  b <- sat (probGenerate p a)
   if b then return $ Just a else solveOne p as
 solveOne _ [] =
   return Nothing
 
 data PermuteProblem a = PermuteProblem
-  { generate :: a -> HBL UE
-  , base     :: HBL UE
-  , varDef   :: UE -> HBL UE
+  { probGenerate :: a -> HBL UE
+  , probBase     :: HBL UE
+  , probEvents :: [UE]
+  , probVarDef   :: UE -> HBL UE
   }
 
 generateProblem ::
@@ -197,14 +198,25 @@ generateProblem ::
   => (LockMap, MHB, DF)
   -> h
   -> PermuteProblem a
-generateProblem (lm, mh, df) h' =
+generateProblem (lm, mh, df) hist =
   PermuteProblem
-    { generate = phiExecE cdf . candidateSet
-    , base = And [sc, mhb_ h]
-    , varDef = (vars !)
+    { probGenerate = phiExecE cdf . candidateSet
+    , probBase = And [sc, mhb_ hist]
+    , probEvents = h
+    , probVarDef = (vars !!!)
     }
   where
-    h = h'
+    h =
+      filter needed $ enumerate hist
+
+    needed ue@(Unique _ e) =
+      case operation e of
+        Enter _ _ -> False
+        Branch -> False
+--        Request _ -> False
+        Read l _ -> maybe False (not . null) $ M.lookup l writes
+--        Write l _ -> maybe False (not . null) $ M.lookup l reads
+        _ -> True
 
     var = Atom . Var
 
@@ -227,17 +239,21 @@ generateProblem (lm, mh, df) h' =
         Release _ ->
           cdf mempty ue
         Branch ->
-          And . map (var) $ filter (onlyVars (ValueSet mempty True True)) (uthread ! ue)
+          And . map (var) $
+            filter (onlyVars (ValueSet mempty True True)) (uthread ! ue)
         _ -> error $ "Wrong variable type: " ++ show e
 
     sc =
       And [ totalOrder t | t <- M.elems $ byThread h ]
 
     lpwr =
-      lockPairsWithRef h
+      lockPairsWithRef hist
 
     writes =
-      mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
+      mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) hist
+
+    reads =
+      mapOnFst $ onReads (\r (l, v) -> (l, (v, r))) hist
 
     cdf vs ue =
       And . map var $ controlFlow vs (uthread ! ue)
@@ -254,7 +270,7 @@ generateProblem (lm, mh, df) h' =
     vars =
       fromUniques
       . map (\u -> u $> runVar u)
-      $ enumerate h
+      $ enumerate hist
 
     onlyVars vs ue' =
       case operation . normal $ ue' of
@@ -264,7 +280,7 @@ generateProblem (lm, mh, df) h' =
         Join _    -> True
         _         -> False
 
-    uthread = threadAt h
+    uthread = threadAt hist
 
 threadAt :: PartialHistory h => h -> UniqueMap [UE]
 threadAt h =

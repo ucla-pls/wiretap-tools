@@ -53,3 +53,11 @@ m ! u =
 (!?) :: UniqueMap a -> Int -> Maybe a
 m !? u =
   M.lookup u $ toIntMap m
+
+
+(!!!) :: Show b => UniqueMap a -> Unique b -> a
+m !!! u =
+  case m !? idx u of
+    Just a -> a
+    Nothing ->
+      error $ "Could not find " ++ (show $ u) ++ " in UniqueMap."
