@@ -75,13 +75,13 @@ phiRead
 phiRead writes cdf mh r (l, v) =
   case [ w | (v', w) <- rwrites , v' == v, not $ mhb mh r w ] of
     [] ->
-      And [ r ~> w' | (_, w') <- rwrites]
+      And [ r ~> w' | (_, w') <- rwrites, not (mhb mh r w')]
       -- If there is no writes with the same value, that not is ordered
       -- after the read, then assume that the read must be reading
       -- something that was written before, ei. ordered before all other writes.
     rvwrites ->
       Or
-      [ And $ cdf w : w ~> r :
+      [ And $ cdf w : (if not $ mhb mh w r then (w ~> r :) else id)
         [ Or [ w' ~> w, r ~> w']
         | (_, w') <- rwrites
         , w' /= w
@@ -213,9 +213,9 @@ generateProblem (lm, mh, df) hist =
       case operation e of
         Enter _ _ -> False
         Branch -> False
---        Request _ -> False
+        Request _ -> False
         Read l _ -> maybe False (not . null) $ M.lookup l writes
---        Write l _ -> maybe False (not . null) $ M.lookup l reads
+        Write l _ -> maybe False (not . null) $ M.lookup l reads
         _ -> True
 
     var = Atom . Var

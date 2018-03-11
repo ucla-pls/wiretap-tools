@@ -112,6 +112,32 @@ remember' ioref f u = do
       after
       return o
 
+
+runIDLSolver ::
+  (MonadIO m, MonadCatch m)
+  => Integer
+  -> (UE -> HBL UE)
+  -> Z3T UE UE m a
+  -> m (Either Z3Error a)
+runIDLSolver timeout f m = do
+  solv <- liftIO $ mkIDLSolver timeout f
+  runSolver solv m
+
+mkIDLSolver :: Integer -> (UE -> HBL UE) -> IO (Z3HBLSolver UE UE)
+mkIDLSolver timeout f = do
+  liaSolver <- mkLIASolver timeout f
+  return $ liaSolver { z3sLogic = Just Z3.QF_IDL }
+
+mkLRASolver :: Integer -> (UE -> HBL UE) -> IO (Z3HBLSolver UE UE)
+mkLRASolver timeout f = do
+  liaSolver <- mkLIASolver timeout f
+  return $ liaSolver { z3sLogic = Just Z3.QF_LRA }
+
+mkRDLSolver :: Integer -> (UE -> HBL UE) -> IO (Z3HBLSolver UE UE)
+mkRDLSolver timeout f = do
+  liaSolver <- mkLIASolver timeout f
+  return $ liaSolver { z3sLogic = Just Z3.QF_RDL }
+
 runLIASolver ::
   (MonadIO m, MonadCatch m)
   => Integer
@@ -120,6 +146,26 @@ runLIASolver ::
   -> m (Either Z3Error a)
 runLIASolver timeout f m = do
   solv <- liftIO $ mkLIASolver timeout f
+  runSolver solv m
+
+runRDLSolver ::
+  (MonadIO m, MonadCatch m)
+  => Integer
+  -> (UE -> HBL UE)
+  -> Z3T UE UE m a
+  -> m (Either Z3Error a)
+runRDLSolver timeout f m = do
+  solv <- liftIO $ mkRDLSolver timeout f
+  runSolver solv m
+
+runLRASolver ::
+  (MonadIO m, MonadCatch m)
+  => Integer
+  -> (UE -> HBL UE)
+  -> Z3T UE UE m a
+  -> m (Either Z3Error a)
+runLRASolver timeout f m = do
+  solv <- liftIO $ mkLRASolver timeout f
   runSolver solv m
 
 mkLIASolver :: Integer -> (UE -> HBL UE) -> IO (Z3HBLSolver UE UE)
@@ -199,4 +245,3 @@ instance (MonadState s m) => MonadState s (Z3T s e m) where
 instance (MonadIO m) => MonadZ3 (Z3T s e m) where
   getSolver = Z3T . asks $ envSolver . fst
   getContext = Z3T . asks $ envContext . fst
-

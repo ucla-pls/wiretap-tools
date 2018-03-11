@@ -96,6 +96,8 @@ Options:
 --solve-time SOLVE_TIME        The time the solver can use before it is timed out
                                (default: 0).
 
+--solver SOLVER                The solver (default: z3:qf_lia)
+
 --ignore IGNORED_FILE          A file containing candidates to ignore.
 
 -v, --verbose                  Produce verbose outputs
@@ -134,7 +136,8 @@ data Config = Config
   , ignoreSet     :: S.Set String
   , chunkSize     :: Maybe Int
   , chunkOffset   :: Int
-  , solveTime    :: Integer
+  , solveTime     :: Integer
+  , solver        :: String
   } deriving (Show, Read)
 
 getArgOrExit :: Arguments -> Option -> IO String
@@ -182,6 +185,7 @@ readConfig args = do
     , humanReadable = args `isPresent` longOption "human-readable"
     , ignoreSet = ignoreSet'
     , solveTime = read $ getArgWithDefault args "0" (longOption "solve-time")
+    , solver = getArgWithDefault args "z3:qf_lia" (longOption "solver")
     }
   where
     getLongOption = getArg args . longOption
@@ -360,6 +364,15 @@ proveCandidates config p findCandidates toString events = do
       modify $ addProven prv
       liftIO $ putStrLn prv
 
+    runChosenSolver =
+      ($ solveTime config) $
+        case (solver config) of
+          "z3:qf_lia" -> runLIASolver
+          "z3:qf_idl" -> runIDLSolver
+          "z3:qf_lra" -> runLRASolver
+          "z3:qf_rdl" -> runRDLSolver
+          a -> error $ "Do not know about solver: " ++ a
+
     chunkProver
       :: forall h. (PartialHistory h)
       => h
@@ -393,7 +406,7 @@ proveCandidates config p findCandidates toString events = do
           | length toBeProven > 0 -> do
               let problem = generateProblem (lm, mh, df) chunk
               say $ "- Ordering " ++ (show $ length (probEvents problem)) ++ " number of events!"
-              e <- runLIASolver (solveTime config) (probVarDef problem) $ do
+              e <- runChosenSolver (probVarDef problem) $ do
                 assert (probBase problem)
                 forM_ toBeProven $ \(item, cs) -> do
                   say $ "- Trying to prove " ++  item ++ ", with "
