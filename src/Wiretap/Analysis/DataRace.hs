@@ -16,7 +16,7 @@ import Control.Monad (liftM2)
 
 import           Wiretap.Data.Event
 import           Wiretap.Data.History
-import           Wiretap.Data.Proof
+import           Wiretap.Analysis.Permute
 import           Wiretap.Utils
 
 sharedLocations :: PartialHistory h
@@ -26,7 +26,7 @@ sharedLocations h =
   filter (not . L.null . snd) . map combineLocation $ byLocation writes
   where
     combineLocation (l, ws) =
-      (l, filter (uncurry (~/~)) pairs)
+      (l, filter (uncurry ((/=) `on` threadOf)) pairs)
       where
         pairs =
           combinations ws ++ readwriteconflicts

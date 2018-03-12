@@ -58,7 +58,7 @@ data Z3HBLSolver s e = Z3HBLSolver
   , z3sTimeout :: Integer
   }
 
-toZ3 :: Z3.Context -> (HBLAtom s e -> IO AST) -> HBL' s e -> IO (AST)
+toZ3 :: Z3.Context -> (HBLAtom s e -> IO AST) -> HBL s e -> IO (AST)
 toZ3 ctx toAST = go
   where
     go hbl =
@@ -116,24 +116,24 @@ remember' ioref f u = do
 runIDLSolver ::
   (MonadIO m, MonadCatch m)
   => Integer
-  -> (UE -> HBL UE)
+  -> (UE -> HBL UE UE)
   -> Z3T UE UE m a
   -> m (Either Z3Error a)
 runIDLSolver timeout f m = do
   solv <- liftIO $ mkIDLSolver timeout f
   runSolver solv m
 
-mkIDLSolver :: Integer -> (UE -> HBL UE) -> IO (Z3HBLSolver UE UE)
+mkIDLSolver :: Integer -> (UE -> HBL UE UE) -> IO (Z3HBLSolver UE UE)
 mkIDLSolver timeout f = do
   liaSolver <- mkLIASolver timeout f
   return $ liaSolver { z3sLogic = Just Z3.QF_IDL }
 
-mkLRASolver :: Integer -> (UE -> HBL UE) -> IO (Z3HBLSolver UE UE)
+mkLRASolver :: Integer -> (UE -> HBL UE UE) -> IO (Z3HBLSolver UE UE)
 mkLRASolver timeout f = do
   liaSolver <- mkLIASolver timeout f
   return $ liaSolver { z3sLogic = Just Z3.QF_LRA }
 
-mkRDLSolver :: Integer -> (UE -> HBL UE) -> IO (Z3HBLSolver UE UE)
+mkRDLSolver :: Integer -> (UE -> HBL UE UE) -> IO (Z3HBLSolver UE UE)
 mkRDLSolver timeout f = do
   liaSolver <- mkLIASolver timeout f
   return $ liaSolver { z3sLogic = Just Z3.QF_RDL }
@@ -141,7 +141,7 @@ mkRDLSolver timeout f = do
 runLIASolver ::
   (MonadIO m, MonadCatch m)
   => Integer
-  -> (UE -> HBL UE)
+  -> (UE -> HBL UE UE)
   -> Z3T UE UE m a
   -> m (Either Z3Error a)
 runLIASolver timeout f m = do
@@ -151,7 +151,7 @@ runLIASolver timeout f m = do
 runRDLSolver ::
   (MonadIO m, MonadCatch m)
   => Integer
-  -> (UE -> HBL UE)
+  -> (UE -> HBL UE UE)
   -> Z3T UE UE m a
   -> m (Either Z3Error a)
 runRDLSolver timeout f m = do
@@ -161,14 +161,14 @@ runRDLSolver timeout f m = do
 runLRASolver ::
   (MonadIO m, MonadCatch m)
   => Integer
-  -> (UE -> HBL UE)
+  -> (UE -> HBL UE UE)
   -> Z3T UE UE m a
   -> m (Either Z3Error a)
 runLRASolver timeout f m = do
   solv <- liftIO $ mkLRASolver timeout f
   runSolver solv m
 
-mkLIASolver :: Integer -> (UE -> HBL UE) -> IO (Z3HBLSolver UE UE)
+mkLIASolver :: Integer -> (UE -> HBL UE UE) -> IO (Z3HBLSolver UE UE)
 mkLIASolver timeout f = do
   events <- newIORef IM.empty
   vars <- newIORef IM.empty

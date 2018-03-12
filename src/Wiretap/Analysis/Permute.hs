@@ -14,12 +14,17 @@ module Wiretap.Analysis.Permute
   , DF
   , CDF
 
-  , PermuteProblem (..)
+  , PermuteProblem
+  , HBLProblem (..)
   , generateProblem
   , solveOne
   , solveAll
 
+  -- * Candidates
   , Candidate(..)
+  , locksetFilter'
+  , locksetFilter
+  , Proof (..)
   )
   where
 
@@ -29,7 +34,9 @@ import           Data.Functor
 import qualified Data.Map                          as M
 import           Data.Maybe
 import           Data.Monoid
+import           Control.Monad.Trans.Either
 import qualified Data.Set                          as S
+import qualified Data.List                         as L
 import           Data.Unique
 import           Prelude                           hiding (reads)
 
@@ -37,9 +44,16 @@ import           Wiretap.Analysis.HBL
 import           Wiretap.Analysis.Lock
 import           Wiretap.Analysis.MustHappenBefore
 import           Wiretap.Data.Event
+import           Wiretap.Data.Program
 import           Wiretap.Data.History
-import           Wiretap.Data.Proof
 import           Wiretap.Utils
+import           Wiretap.Format.Text
+
+-- import           Data.List (intercalate)
+-- import           Debug.Trace
+
+
+type PHBL = HBL UE UE
 
 lockPairsWithRef
   :: PartialHistory h
@@ -68,10 +82,10 @@ lockPairsWithRef h =
 
 phiRead
   :: M.Map Location [(Value, UE)]
-  -> (UE -> HBL UE)
+  -> (UE -> PHBL)
   -> MHB
   -> UE -> (Location, Value)
-  -> HBL UE
+  -> PHBL
 phiRead writes cdf mh r (l, v) =
   case [ w | (v', w) <- rwrites , v' == v, not $ mhb mh r w ] of
     [] ->
@@ -90,17 +104,18 @@ phiRead writes cdf mh r (l, v) =
         ]
       | w <- rvwrites
       , not $ mhb mh r w
+      , not $ mhb mh w r && any (\(_, w') -> mhb mh w w' && mhb mh w' r) rwrites
       ]
   where
     rwrites = fromMaybe [] $ M.lookup l writes
 
 phiAcq
   :: (M.Map Ref ([UE], [(UE, UE)], [UE]))
-  -> (UE -> HBL UE)
+  -> (UE -> PHBL)
   -> MHB
   -> UE
   -> Ref
-  -> HBL UE
+  -> PHBL
 phiAcq lpwr cdf mh e ref' =
   And
   [ And
@@ -128,17 +143,17 @@ phiAcq lpwr cdf mh e ref' =
 phiExecE
   :: CDF
   -> S.Set UE
-  -> HBL UE
+  -> PHBL
 phiExecE cdf es =
   And $ concurrent es :
   [ cdf mempty e
   | e <- S.toList es
   ]
 
-type CDF = ValueSet -> UE -> HBL UE
+type CDF = ValueSet -> UE -> PHBL
 type DF = ValueSet -> Value -> Bool
 
-mhb_ :: PartialHistory h => h -> HBL UE
+mhb_ :: PartialHistory h => h -> PHBL
 mhb_ h =
   And
   [ And
@@ -186,12 +201,7 @@ solveOne p (a:as) = do
 solveOne _ [] =
   return Nothing
 
-data PermuteProblem a = PermuteProblem
-  { probGenerate :: a -> HBL UE
-  , probBase     :: HBL UE
-  , probEvents :: [UE]
-  , probVarDef   :: UE -> HBL UE
-  }
+type PermuteProblem = HBLProblem UE UE
 
 generateProblem ::
   (PartialHistory h, Candidate a)
@@ -199,26 +209,15 @@ generateProblem ::
   -> h
   -> PermuteProblem a
 generateProblem (lm, mh, df) hist =
-  PermuteProblem
+  HBLProblem
     { probGenerate = phiExecE cdf . candidateSet
     , probBase = And [sc, mhb_ hist]
-    , probEvents = h
-    , probVarDef = (vars !!!)
+    , probElements = h
+    , probSymbols = enumerate hist
+    , probSymbolDef = (vars !!!)
     }
   where
-    h =
-      filter needed $ enumerate hist
-
-    needed ue@(Unique _ e) =
-      case operation e of
-        Enter _ _ -> False
-        Branch -> False
-        Request _ -> False
-        Read l _ -> maybe False (not . null) $ M.lookup l writes
-        Write l _ -> maybe False (not . null) $ M.lookup l reads
-        _ -> True
-
-    var = Atom . Var
+    var = Atom . Symbol
 
     runVar ue@(Unique _ e) =
       case operation e of
@@ -246,14 +245,45 @@ generateProblem (lm, mh, df) hist =
     sc =
       And [ totalOrder t | t <- M.elems $ byThread h ]
 
+    h =
+      filter needed $ enumerate hist
+
+    needed ue@(Unique _ e) =
+      case operation e of
+        Enter _ _ -> False
+        Branch -> False
+        Request _ -> False
+        Read _ _ -> maybe False (not . null) $ M.lookup ue conflicts
+        Write _ _ -> ue `S.member` conflictingWrites
+        _ -> True
+
+    conflictingWrites =
+      S.fromList . concat . M.elems $ conflicts
+
+    -- Conflicts produces a list of pairs of all read to writes events,
+    -- we then proceed to remove all conflicts that is must happen related.
+    conflicts' :: M.Map UE [UE]
+    conflicts' =
+      mapOnFst
+      . filter (uncurry $ mhbFree mh)
+      . concat
+      $ onReads conflictsOfRead hist
+
+    conflicts = conflicts'
+      -- trace (intercalate "\n" . map (\(a,b) -> show a ++ " : " ++ show (length b) )
+      --        $ M.toList conflicts') conflicts'
+    -- Pretty print map
+
+    conflictsOfRead r (l, _) =
+      [ (r, w)
+      | (_, w) <- maybe [] id $ M.lookup l writes
+      ]
+
     lpwr =
       lockPairsWithRef hist
 
     writes =
       mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) hist
-
-    reads =
-      mapOnFst $ onReads (\r (l, v) -> (l, (v, r))) hist
 
     cdf vs ue =
       And . map var $ controlFlow vs (uthread ! ue)
@@ -369,3 +399,39 @@ valuesOf (Unique _ e) =
       fromRef r
     _ ->
       mempty
+
+type CandidateSet = S.Set UE
+
+class Candidate a where
+  candidateSet :: a -> CandidateSet
+  prettyPrint :: Program -> a -> IO String
+  prettyPrint p a =
+      L.intercalate " " . L.sort . L.map (pp p) <$>
+        mapM (instruction p . normal) (S.toList $ candidateSet a)
+
+data Proof a = Proof
+  { candidate   :: a
+  , constraints :: PHBL
+  , evidence    :: [UE]
+  } deriving Functor
+
+locksetFilter
+  :: (Candidate a, PartialHistory h, Monad m)
+  => h
+  -> a
+  -> EitherT [(Ref, (UE,UE))] m a
+locksetFilter h =
+  locksetFilter' $ lockMap h
+
+locksetFilter'
+  :: (Candidate a, Monad m)
+  => LockMap
+  -> a
+  -> EitherT [(Ref, (UE,UE))] m a
+locksetFilter' lm c = do
+ case L.concatMap (M.assocs) intersections of
+   [] -> return c
+   ls -> left $ ls
+ where
+   intersections =
+     L.map (uncurry (sharedLocks lm)) $ combinations (S.toList $ candidateSet c)

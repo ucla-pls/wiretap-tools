@@ -52,10 +52,10 @@ import           Wiretap.Data.Event
 import           Wiretap.Data.History
 import qualified Wiretap.Data.Program             as Program
 import           Wiretap.Analysis.DataRace
+import           Wiretap.Analysis.Deadlock
 import           Wiretap.Analysis.HBL
 import           Wiretap.Analysis.HBL.Z3
-import           Wiretap.Data.Proof
-import           Wiretap.Analysis.Lock
+import           Wiretap.Analysis.Lock hiding (lockMap)
 import           Wiretap.Analysis.Permute
 import           Wiretap.Analysis.MustHappenBefore
 
@@ -364,13 +364,12 @@ proveCandidates config p findCandidates toString events = do
       modify $ addProven prv
       liftIO $ putStrLn prv
 
-    runChosenSolver =
-      ($ solveTime config) $
+    runChosenSolver prv =
         case (solver config) of
-          "z3:qf_lia" -> runLIASolver
-          "z3:qf_idl" -> runIDLSolver
-          "z3:qf_lra" -> runLRASolver
-          "z3:qf_rdl" -> runRDLSolver
+          "z3:qf_lia" -> runLIASolver (solveTime config) (probSymbolDef prv)
+          "z3:qf_idl" -> runIDLSolver (solveTime config) (probSymbolDef prv)
+          "z3:qf_lra" -> runLRASolver (solveTime config) (probSymbolDef prv)
+          "z3:qf_rdl" -> runRDLSolver (solveTime config) (probSymbolDef prv)
           a -> error $ "Do not know about solver: " ++ a
 
     chunkProver
@@ -404,9 +403,18 @@ proveCandidates config p findCandidates toString events = do
       case getProver (prover config) of
         Just df
           | length toBeProven > 0 -> do
-              let problem = generateProblem (lm, mh, df) chunk
-              say $ "- Ordering " ++ (show $ length (probEvents problem)) ++ " number of events!"
-              e <- runChosenSolver (probVarDef problem) $ do
+
+              let problem' = generateProblem (lm, mh, df) chunk
+              say $ "- Problem: "
+              say $ "  + elements: " ++ (show . countEventsF . map normal $ probElements problem')
+              say $ "  + symbols:  " ++ (show . countEventsF . map normal $ probSymbols problem')
+
+              let problem = reduceProblem problem'
+              say $ "- Reduced problem: "
+              say $ "  + elements: " ++ (show . countEventsF . map normal $ probElements problem)
+              say $ "  + symbols:  " ++ (show . countEventsF . map normal $ probSymbols problem)
+
+              e <- runChosenSolver problem $ do
                 assert (probBase problem)
                 forM_ toBeProven $ \(item, cs) -> do
                   say $ "- Trying to prove " ++  item ++ ", with "

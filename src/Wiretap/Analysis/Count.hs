@@ -1,5 +1,6 @@
 module Wiretap.Analysis.Count
   ( countEvents
+  , countEventsF
   , counterToRow
   , counterHeader
   , incrCounter
@@ -97,6 +98,10 @@ counterToRow c =
     , branches
     , enters
     ] <*> [c]
+
+
+countEventsF :: Foldable f => f Event -> Counter
+countEventsF = foldMap (incrCounter mempty)
 
 countEvents :: Monad m => Producer Event m () -> m Counter
 countEvents = P.fold incrCounter mempty id
