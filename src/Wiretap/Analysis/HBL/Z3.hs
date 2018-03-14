@@ -88,7 +88,7 @@ runSolver solver (Z3T s) = do
   where
     opts =
       (stdOpts) +? if timeout > 0
-         then (opt "rlimit" timeout)
+         then (opt "timeout" timeout)
          else mempty
 
     timeout = z3sTimeout solver
@@ -188,7 +188,7 @@ mkLIASolver timeout f = do
           a' <- evar a
           b' <- evar b
           Base.mkEq ctx a' b'
-        Var s ->
+        Symbol s ->
           svar s
       where
         ctx = envContext env

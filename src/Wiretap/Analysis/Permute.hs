@@ -95,13 +95,15 @@ phiRead writes cdf mh r (l, v) =
       -- something that was written before, ei. ordered before all other writes.
     rvwrites ->
       Or
-      [ And $ cdf w : (if not $ mhb mh w r then (w ~> r :) else id)
-        [ Or [ w' ~> w, r ~> w']
-        | (_, w') <- rwrites
-        , w' /= w
-        , not $ mhb mh w' w
-        , not $ mhb mh r w'
-        ]
+      [ And
+        . (if threadOf w /= threadOf r then (cdf w :) else id)
+        . (if not $ mhb mh w r then (w ~> r :) else id)
+        $ [ Or [ w' ~> w, r ~> w']
+          | (_, w') <- rwrites
+          , w' /= w
+          , not $ mhb mh w' w
+          , not $ mhb mh r w'
+          ]
       | w <- rvwrites
       , not $ mhb mh r w
       , not $ mhb mh w r && any (\(_, w') -> mhb mh w w' && mhb mh w' r) rwrites
@@ -120,12 +122,15 @@ phiAcq lpwr cdf mh e ref' =
   And
   [ And
     [ Or
-      [ e ~> a
-      , And [ r ~> e, cdf r ]
-      ]
+      . (if mhb mh r e then id else (e ~> a:))
+      $ [ And
+          . (if mhb mh r e then id else (r ~> e:))
+          $ [ cdf r ]
+        ]
     | (a, r) <- pairs
     , e /= a
     , not $ mhb mh e a
+    , not $ mhb mh r e && threadOf r == threadOf e
     ]
   , And
     [ e ~> a
@@ -211,7 +216,7 @@ generateProblem ::
 generateProblem (lm, mh, df) hist =
   HBLProblem
     { probGenerate = phiExecE cdf . candidateSet
-    , probBase = And [sc, mhb_ hist]
+    , probBase = And [sc]
     , probElements = h
     , probSymbols = enumerate hist
     , probSymbolDef = (vars !!!)
@@ -227,11 +232,11 @@ generateProblem (lm, mh, df) hist =
           phiAcq lpwr var mh ue l
         Begin ->
           case mhbForkOf mh ue of
-            Just f  -> cdf mempty f
+            Just f  -> And [f  ~> ue, cdf mempty f]
             Nothing -> And []
         Join t' ->
           case mhbEndOf mh t' of
-            Just e' -> cdf mempty e'
+            Just e' -> And [e' ~> ue, cdf mempty e']
             Nothing -> And []
         Write _ v ->
           cdf (fromValue v) ue
