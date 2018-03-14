@@ -28,7 +28,7 @@ module Wiretap.Analysis.Permute
   )
   where
 
-import           Control.Lens                      hiding (none)
+-- import           Control.Lens                      hiding (none)
 import           Control.Monad
 import           Data.Functor
 import qualified Data.Map                          as M
@@ -50,7 +50,7 @@ import           Wiretap.Utils
 import           Wiretap.Format.Text
 
 -- import           Data.List (intercalate)
--- import           Debug.Trace
+import           Debug.Trace
 
 
 type PHBL = HBL UE UE
@@ -96,16 +96,23 @@ phiRead writes cdf mh r (l, v) =
     rvwrites ->
       Or
       [ And
+        -- If the w is the same thread as r, it is executable, because the thread already have
+        -- the value of v, because else r would not be executable.
         . (if threadOf w /= threadOf r then (cdf w :) else id)
+        -- If we already know w -mh-> r, don't redo it.
         . (if not $ mhb mh w r then (w ~> r :) else id)
         $ [ Or [ w' ~> w, r ~> w']
           | (_, w') <- rwrites
           , w' /= w
+          -- this is true if w' -mh-> w
           , not $ mhb mh w' w
+          -- this is true if r -mh-> w'
           , not $ mhb mh r w'
           ]
       | w <- rvwrites
+      -- It is automatically false if r -mh-> w
       , not $ mhb mh r w
+      -- It is automatically false if w -mh-> r and there exists a write between w -mh-> w' -mh-> r
       , not $ mhb mh w r && any (\(_, w') -> mhb mh w w' && mhb mh w' r) rwrites
       ]
   where
@@ -122,24 +129,30 @@ phiAcq lpwr cdf mh e ref' =
   And
   [ And
     [ Or
-      . (if mhb mh r e then id else (e ~> a:))
+      . ( e ~?> a )
       $ [ And
-          . (if mhb mh r e then id else (r ~> e:))
-          $ [ cdf r ]
+          . ( r ~?> e )
+          $ [cdf r]
         ]
     | (a, r) <- pairs
+    -- Don't match yourself
     , e /= a
+    -- if e -mh-> a then this is true
     , not $ mhb mh e a
+    -- if r -mh-> a then it is fine, but only if the thread is the same,
+    -- because else we can not be guaranteed that cdf r is true.
     , not $ mhb mh r e && threadOf r == threadOf e
     ]
   , And
     [ e ~> a
     | a <- da
     , e /= a
-    , mhbFree mh e a
+    -- Automatically true if e -mh-> a
+    , not $ mhb mh e a
     ]
   ]
   where
+    e' ~?> a' = (if not $ mhb mh e' a' then (e' ~> a':) else id)
     (_, pairs, da) =
       case M.lookup ref' lpwr of
         Just pairs' -> pairs'
@@ -147,44 +160,17 @@ phiAcq lpwr cdf mh e ref' =
 
 phiExecE
   :: CDF
+  -> (UE -> PHBL)
   -> S.Set UE
   -> PHBL
-phiExecE cdf es =
+phiExecE cdf sc es =
   And $ concurrent es :
-  [ cdf mempty e
+  [ And [ cdf mempty e, sc e ]
   | e <- S.toList es
   ]
 
 type CDF = ValueSet -> UE -> PHBL
 type DF = ValueSet -> Value -> Bool
-
-mhb_ :: PartialHistory h => h -> PHBL
-mhb_ h =
-  And
-  [ And
-    [ And
-      [ f ~> b
-      | f <- forks, b <- begins
-      ]
-    , And
-      [ e ~> j
-      | e <- ends, j <- joins
-      ]
-    ]
-  | (joins, forks, begins, ends) <- mhbEventsByThread
-  ]
-  where
-    mhbEventsByThread =
-      M.elems $ simulate step M.empty h
-    step u@(Unique _ e) =
-      case operation e of
-        Join t -> update u _1 t
-        Fork t -> update u _2 t
-        Begin  -> update u _3 $ thread e
-        End    -> update u _4 $ thread e
-        _      -> id
-    update u l =
-      updateDefault ([], [], [], []) (over l (u:))
 
 solveAll
   :: (HBLSolver UE UE m)
@@ -215,9 +201,9 @@ generateProblem ::
   -> PermuteProblem a
 generateProblem (lm, mh, df) hist =
   HBLProblem
-    { probGenerate = phiExecE cdf . candidateSet
+    { probGenerate = phiExecE cdf reInsert . candidateSet
     , probBase = And [sc]
-    , probElements = h
+    , probElements = h'
     , probSymbols = enumerate hist
     , probSymbolDef = (vars !!!)
     }
@@ -248,10 +234,31 @@ generateProblem (lm, mh, df) hist =
         _ -> error $ "Wrong variable type: " ++ show e
 
     sc =
-      And [ totalOrder t | t <- M.elems $ byThread h ]
+      And [ totalOrder t | t <- M.elems $ byThread h' ]
 
-    h =
+    h' =
       filter needed $ enumerate hist
+
+    reInsert ue
+      | not $ needed ue =
+        let (l, n) = lastNext ue $ fromMaybe [] $ M.lookup (threadOf ue) threadwise
+        in And . (maybe (id) ((:).(~> ue)) l) $ (maybe (id) ((:).(ue ~>)) n) []
+      | otherwise =
+        And []
+
+    threadwise = byThread hist
+
+    lastNext ue lst =
+      let
+        (before, after) = break (== ue) lst
+        b = filter needed before
+        l = if L.null b then Nothing else Just $ last b
+        n = case after of
+          [] -> Nothing;
+          _:ls -> case filter needed ls of
+            a':_ -> Just a'
+            _ -> Nothing
+      in (l, n)
 
     needed ue@(Unique _ e) =
       case operation e of
