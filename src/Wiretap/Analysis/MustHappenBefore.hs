@@ -83,9 +83,11 @@ graphFromEdges ::
   [(UE, UE)]
   -> MHBGraph
 graphFromEdges edges =
-  Map.fromListWithKey shouldNotHappen $ List.foldl' addEdge [] edges
+  Map.fromListWithKey pickSmallest $ List.foldl' addEdge [] edges
   where
-    shouldNotHappen k a a' = error $ "This should not happen " ++ show (k,a,a')
+    pickSmallest k a@(n1, n2) a'@(n3, n4)
+      | n1 == n3 = (n1, min n2 n4)
+      | otherwise = error $ "This should not happen " ++ show (k,a,a')
     addEdge m (Unique _ e1, Unique _ e2) =
       ((thread e1, thread e2),(order e1, order e2)):
           List.concatMap f m
