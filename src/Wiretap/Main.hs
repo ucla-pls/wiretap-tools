@@ -57,6 +57,7 @@ import           Wiretap.Analysis.HBL
 import           Wiretap.Analysis.HBL.Z3
 import           Wiretap.Analysis.Lock hiding (lockMap)
 import           Wiretap.Analysis.Permute
+import           Wiretap.Analysis.Consistency
 import           Wiretap.Analysis.MustHappenBefore
 
 patterns :: Docopt
@@ -69,6 +70,7 @@ Usage:
    wiretap-tools dataraces [options] [<history>]
    wiretap-tools deadlocks [options] [<history>]
    wiretap-tools bugs [options] [<history>]
+   wiretap-tools check [options] [<history>]
    wiretap-tools (--help | --version)
 
 Options:
@@ -236,6 +238,11 @@ runCommand args config = do
            , BDataRace <$> raceCandidates h
            ]
       ) $ prettyPrint p
+
+  onCommand "check" $
+    (\e -> return (e >-> PM.scan' (\i e' -> (i+1, Unique i e')) 0))
+    >=> checkConsistency
+    >=> print
 
   where
     getProgram cfg =
@@ -410,20 +417,24 @@ proveCandidates config p findCandidates toString events = do
               say $ "  + symbols:  " ++ (show . countEventsF . map normal $ probSymbols problem')
 
               let problem = reduceProblem problem'
-              say $ "- Reduced problem: "
-              say $ "  + elements: " ++ (show . countEventsF . map normal $ probElements problem)
-              say $ "  + symbols:  " ++ (show . countEventsF . map normal $ probSymbols problem)
+              -- say $ "- Reduced problem: "
+              -- say $ "  + elements: " ++ (show . countEventsF . map normal $ probElements problem)
+              -- say $ "  + symbols:  " ++ (show . countEventsF . map normal $ probSymbols problem)
 
               e <- runChosenSolver problem $ do
                 assert (probBase problem)
                 forM_ toBeProven $ \(item, cs) -> do
                   say $ "- Trying to prove " ++  item ++ ", with "
                        ++ show (length cs) ++ " candidates."
+                  -- forM_ cs $ \c -> do
+                  --   say (show c)
                   x <- solveOne problem cs
                   case x of
                     Nothing ->
                       say "  - Could not prove constraints."
-                    Just _ -> do
+                    Just c -> do
+                      forM_ (candidateSet c) $ \cs' ->
+                        say (show cs')
                       lift $ markProven item
                       -- liftIO $ printProof pf
               either (say . show) return $ e

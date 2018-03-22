@@ -50,7 +50,7 @@ import           Wiretap.Utils
 import           Wiretap.Format.Text
 
 -- import           Data.List (intercalate)
-import           Debug.Trace
+-- import           Debug.Trace
 
 
 type PHBL = HBL UE UE
@@ -94,7 +94,10 @@ phiRead writes cdf mh r (l, v) =
       -- after the read, then assume that the read must be reading
       -- something that was written before, ei. ordered before all other writes.
     rvwrites ->
-      Or
+      Or $
+-- TODO: Consider adding something on the lines of
+--      (And [ r ~> w' | (_, w') <- rwrites, not (mhb mh r w')]):
+-- to fix the problem that sometimes we load things from the default value.
       [ And
         -- If the w is the same thread as r, it is executable, because the thread already have
         -- the value of v, because else r would not be executable.
@@ -112,7 +115,8 @@ phiRead writes cdf mh r (l, v) =
       | w <- rvwrites
       -- It is automatically false if r -mh-> w
       , not $ mhb mh r w
-      -- It is automatically false if w -mh-> r and there exists a write between w -mh-> w' -mh-> r
+      -- It is automatically false if w -mh-> r and
+      -- there exists a write between w -mh-> w' -mh-> r
       , not $ mhb mh w r && any (\(_, w') -> mhb mh w w' && mhb mh w' r) rwrites
       ]
   where

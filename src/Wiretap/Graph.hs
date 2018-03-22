@@ -17,6 +17,7 @@ import qualified Data.Graph.Inductive.PatriciaTree as GP
 import Data.Graph.Inductive.Query.DFS
 import Data.Tree
 import Data.List
+-- import Debug.Trace
 import Data.Maybe
 import Data.Unique
 import Wiretap.Utils
@@ -56,7 +57,7 @@ cycles
   -> (a -> a -> Maybe b)
   -> [Cycle a b]
 cycles elems f =
-  map fromEdge <$> cycles' graph
+  map fromEdge . reverse <$> cycles' graph
   where
     fromEdge (n, l, n') = (fromNode n, l, fromNode n')
 

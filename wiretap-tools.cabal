@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 0d9aa49ff0a69efeeec4878e4a687d367c41587f3ce5b00ccaa8a36fc25c14a0
+-- hash: 6f9a4b853cd54be5b1dd1db1ad17fa9f940aaf35ad567964a6b8c8173a4ea2f6
 
 name:           wiretap-tools
 version:        0.1.0.0
@@ -50,6 +50,7 @@ library
       Data.Unique
       Pipes.Missing
       Wiretap.Analysis
+      Wiretap.Analysis.Consistency
       Wiretap.Analysis.Count
       Wiretap.Analysis.DataRace
       Wiretap.Analysis.Deadlock

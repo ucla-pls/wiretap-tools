@@ -87,7 +87,7 @@ deadlockCandidates' h lockmap =
         go e edges ((_, l, n'):rest) = do
           e' <- fromJust $ M.lookup n' requestGroups
           let acq = fromJust . M.lookup l $ lockmap ! e
-          go e' ( DeadlockEdge e (LockEdgeLabel l acq) e':edges) rest
+          go e' (DeadlockEdge e (LockEdgeLabel l acq) e' : edges ) rest
 
 
 deadlockCandidates :: PartialHistory h
