@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveAnyClass             #-}
+{-# LANGUAGE DeriveFunctor              #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
@@ -30,27 +32,31 @@ module Wiretap.Analysis.HBL
   , add
    -- * Solver
   , HBLSolver (..)
+
+  -- *
+  , bimap
   )
 where
 
-import           Prelude                    hiding (product)
+import           Prelude                           hiding (product)
 
 -- import qualified Data.IntMap.Strict         as IM
 -- import qualified Data.List                  as L
 -- import           Data.Unique
 -- import           Control.Monad.IO.Class
 
-import Data.Maybe
-import qualified Data.Map as M
-import qualified Data.IntMap as IM
+import qualified Data.IntMap                       as IM
+import qualified Data.Map                          as M
+import           Data.Maybe
+import           Data.Bifunctor
 -- import qualified Data.IntSet as IS
-import qualified Data.Set as S
-import qualified Data.List as L
-import qualified Data.Graph.Inductive.Graph as G
+import           Data.Foldable                     (Foldable, toList)
+import qualified Data.Graph.Inductive.Graph        as G
 import qualified Data.Graph.Inductive.PatriciaTree as G
-import qualified Data.Graph.Inductive.Query.DFS as G
+import qualified Data.Graph.Inductive.Query.DFS    as G
+import qualified Data.List                         as L
+import qualified Data.Set                          as S
 import           Wiretap.Utils
-import           Data.Foldable (Foldable, toList)
 
 -- import Debug.Trace
 
@@ -59,14 +65,22 @@ data Logic a
   = And [Logic a]
   | Or [Logic a]
   | Atom !a
-  deriving (Show, Eq)
+  deriving (Show, Eq, Functor)
+
 
 -- | The happens before logic atoms
 data HBLAtom s e
  = Order e e
  | Concur e e
  | Symbol s
- deriving (Show)
+ deriving (Show, Functor)
+
+instance Bifunctor HBLAtom where
+  first f (Symbol s) =
+    Symbol (f s)
+  first _ (Order e1 e2) = (Order e1 e2)
+  first _ (Concur e1 e2) = (Concur e1 e2)
+  second = fmap
 
 -- | HBL - Happens before logic
 type HBL s e = Logic (HBLAtom s e)
@@ -75,8 +89,8 @@ hblSize :: HBL s e -> Integer
 hblSize hbl =
   case hbl of
     Atom _ -> 1
-    And ls    -> 1 + sum (map hblSize ls)
-    Or ls     -> 1 + sum (map hblSize ls)
+    And ls -> 1 + sum (map hblSize ls)
+    Or ls  -> 1 + sum (map hblSize ls)
 
 infixl 8 ~>
 (~>) :: e -> e -> HBL s e
@@ -111,11 +125,11 @@ class (Monad m) => HBLSolver s e m where
   sat :: HBL s e -> m Bool
 
 data HBLProblem s e a = HBLProblem
-  { probGenerate :: a -> HBL s e
-  , probBase     :: HBL s e
-  , probElements :: [e]
-  , probSymbols :: [s]
-  , probSymbolDef  :: s -> HBL s e
+  { probGenerate  :: a -> HBL s e
+  , probBase      :: HBL s e
+  , probElements  :: [e]
+  , probSymbols   :: [s]
+  , probSymbolDef :: s -> HBL s e
   }
 
 reduceProblem :: (Ord e, Ord s) => HBLProblem s e a -> HBLProblem s e a
@@ -139,8 +153,8 @@ reduceProblem' pw@(sm, _) p =
 
 data Linear e = Linear
   { lToGroup :: M.Map e (G.Node, Int)
-  , lGroups :: IM.IntMap (S.Set e)
-  , lGraph :: G.Gr () ()
+  , lGroups  :: IM.IntMap (S.Set e)
+  , lGraph   :: G.Gr () ()
   }
 
 ordered :: Ord e => Linear e -> e -> e -> Bool
@@ -200,15 +214,15 @@ reduce pw l =
     join (Just b) a =
       case a of
         And as -> Just $ as ++ b
-        Or [] -> Nothing
-        _ -> Just $ [a] ++ b
+        Or []  -> Nothing
+        _      -> Just $ [a] ++ b
     join Nothing _ = Nothing
 
     intersect (Just b) a =
       case a of
-        Or as -> Just $ as ++ b
+        Or as  -> Just $ as ++ b
         And [] -> Nothing
-        _ -> Just $ [a] ++ b
+        _      -> Just $ [a] ++ b
     intersect Nothing _ = Nothing
 
 reduceAtom :: (Ord e, Ord s) => PartialWorld s e -> HBLAtom s e -> HBL s e
@@ -224,8 +238,8 @@ reduceAtom (symbols, lin) l =
         Or []
     Symbol s ->
       case M.lookup s symbols of
-        Just True -> And []
+        Just True  -> And []
         Just False -> Or []
-        Nothing -> Atom l
+        Nothing    -> Atom l
     _ ->
       Atom l

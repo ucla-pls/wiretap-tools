@@ -61,3 +61,6 @@ m !!! u =
     Just a -> a
     Nothing ->
       error $ "Could not find " ++ (show $ u) ++ " in UniqueMap."
+
+ushow :: Unique a -> String
+ushow = show . idx

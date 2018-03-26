@@ -28,6 +28,8 @@ import           Data.Unique
 import           Wiretap.Analysis.HBL
 import           Wiretap.Data.History
 
+import Debug.Trace
+
 
 newtype Z3T s e m a = Z3T
   { _unZ3 :: ReaderT (Z3EnvC, Z3HBLSolver s e) m a
@@ -49,6 +51,13 @@ instance MonadIO m => HBLSolver s e (Z3T s e m) where
       Base.solverPush ctx slv
       Base.solverAssertCnstr ctx slv ast
       result <- Base.solverCheck ctx slv
+      -- (result, model) <- Base.solverCheckAndGetModel ctx slv
+      -- case model of
+      --   Just m -> do
+      --     mstr <- Base.modelToString ctx m
+      --     traceM mstr
+      --   Nothing ->
+      --     traceM "No model"
       Base.solverPop ctx slv 1
       return $ Sat == result
 

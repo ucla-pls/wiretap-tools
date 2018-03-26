@@ -44,6 +44,10 @@ data Event = Event
   , operation :: !Operation
   } deriving (Show, Eq, Ord)
 
+eshow :: Event -> String
+eshow e =
+  "t" ++ show (threadId.thread $ e) ++ "." ++ show (order e) ++ "!" ++ show (operation e)
+
 ppEvent :: Event -> String
 ppEvent e = 't' : (show (threadId $ thread e) ++ '.' : show (order e))
 

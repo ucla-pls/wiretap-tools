@@ -104,7 +104,14 @@ phiRead writes cdf mh r (l, v) =
         . (if threadOf w /= threadOf r then (cdf w :) else id)
         -- If we already know w -mh-> r, don't redo it.
         . (if not $ mhb mh w r then (w ~> r :) else id)
-        $ [ Or [ w' ~> w, r ~> w']
+        $ [ case () of
+              ()
+                | mhb mh w w' ->
+                   r ~> w'
+                | mhb mh r w' ->
+                  w' ~> w
+                | otherwise ->
+                   Or [ w' ~> w , r ~> w']
           | (_, w') <- rwrites
           , w' /= w
           -- this is true if w' -mh-> w
@@ -215,27 +222,29 @@ generateProblem (lm, mh, df) hist =
     var = Atom . Symbol
 
     runVar ue@(Unique _ e) =
-      case operation e of
-        Read l v ->
-          phiRead writes var mh ue (l,v)
-        Acquire l ->
-          phiAcq lpwr var mh ue l
-        Begin ->
-          case mhbForkOf mh ue of
-            Just f  -> And [f  ~> ue, cdf mempty f]
-            Nothing -> And []
-        Join t' ->
-          case mhbEndOf mh t' of
-            Just e' -> And [e' ~> ue, cdf mempty e']
-            Nothing -> And []
-        Write _ v ->
-          cdf (fromValue v) ue
-        Release _ ->
-          cdf mempty ue
-        Branch ->
-          And . map (var) $
-            filter (onlyVars (ValueSet mempty True True)) (uthread ! ue)
-        _ -> error $ "Wrong variable type: " ++ show e
+      x -- trace (show (idx ue) ++ " --> " ++ show (bimap idx idx <$> x)) x
+      where
+        x = case operation e of
+              Read l v ->
+                phiRead writes var mh ue (l,v)
+              Acquire l ->
+                phiAcq lpwr var mh ue l
+              Begin ->
+                case mhbForkOf mh ue of
+                  Just f  -> And [f  ~> ue, cdf mempty f]
+                  Nothing -> And []
+              Join t' ->
+                case mhbEndOf mh t' of
+                  Just e' -> And [e' ~> ue, cdf mempty e']
+                  Nothing -> And []
+              Write _ v ->
+                cdf (fromValue v) ue
+              Release _ ->
+                cdf mempty ue
+              Branch ->
+                And . map (var) $
+                  filter (onlyVars (ValueSet mempty True True)) (uthread ! ue)
+              _ -> error $ "Wrong variable type: " ++ show e
 
     sc =
       And [ totalOrder t | t <- M.elems $ byThread h' ]
@@ -270,11 +279,20 @@ generateProblem (lm, mh, df) hist =
         Branch -> False
         Request _ -> False
         Read _ _ -> maybe False (not . null) $ M.lookup ue conflicts
-        Write _ _ -> ue `S.member` conflictingWrites
+        Write _ _ ->
+          -- trace (show (eshow <$> ue) ++ " " ++ show (ue `S.member` conflictingWrites))
+           ue `S.member` conflictingWrites
         _ -> True
 
+
+    -- A conflicting write exists if just one write event to some
+    -- place is conflicting
     conflictingWrites =
-      S.fromList . concat . M.elems $ conflicts
+      S.fromList . concat . map allWrites . concat . M.elems $ conflicts
+      where
+        location (Write l _) = l
+        location _ = undefined
+        allWrites e = maybe [] (map snd) $ M.lookup (location (operation . normal $ e)) writes
 
     -- Conflicts produces a list of pairs of all read to writes events,
     -- we then proceed to remove all conflicts that is must happen related.
@@ -286,7 +304,7 @@ generateProblem (lm, mh, df) hist =
       $ onReads conflictsOfRead hist
 
     conflicts = conflicts'
-      -- trace (intercalate "\n" . map (\(a,b) -> show a ++ " : " ++ show (length b) )
+      -- trace (L.intercalate "\n" . map (\(a,b) -> (show $ eshow <$> a) ++ " : " ++ show (fmap eshow <$> b) )
       --        $ M.toList conflicts') conflicts'
     -- Pretty print map
 
