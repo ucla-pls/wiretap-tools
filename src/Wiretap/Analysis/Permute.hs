@@ -108,7 +108,7 @@ phiRead writes cdf mh r (l, v) =
               ()
                 | mhb mh w w' ->
                    r ~> w'
-                | mhb mh r w' ->
+                | mhb mh w' r ->
                   w' ~> w
                 | otherwise ->
                    Or [ w' ~> w , r ~> w']
@@ -122,9 +122,8 @@ phiRead writes cdf mh r (l, v) =
       | w <- rvwrites
       -- It is automatically false if r -mh-> w
       , not $ mhb mh r w
-      -- It is automatically false if w -mh-> r and
-      -- there exists a write between w -mh-> w' -mh-> r
-      , not $ mhb mh w r && any (\(_, w') -> mhb mh w w' && mhb mh w' r) rwrites
+      -- It is automatically false if there exists a write between w -mh-> w' -mh-> r
+      , not $ any (\(_, w') -> mhb mh w w' && mhb mh w' r) rwrites
       ]
   where
     rwrites = fromMaybe [] $ M.lookup l writes
