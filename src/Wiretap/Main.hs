@@ -206,8 +206,9 @@ runCommand args config = do
       i <- lift (instruction p e)
       lift $ do
         putStrLn $ pprint e
-        putStr "        "
-        putStrLn $ Program.instName p i
+        when (humanReadable config) $ do
+          putStr "        "
+          putStrLn $ Program.instName p i
 
   onCommand "count" $
     countEvents >=> print
@@ -309,6 +310,7 @@ proveCandidates
   -> m ()
 proveCandidates config p findCandidates toString events = do
   say $ "Filters: " ++ show (filters config)
+  say $ "Human Readable: " ++ show (humanReadable config)
   runEffect $ uniqueEvents >-> PL.evalStateP initialState proverPipe
 
   where
@@ -433,13 +435,20 @@ proveCandidates config p findCandidates toString events = do
                     Nothing ->
                       say "  - Could not prove constraints."
                     Just c -> do
-                      forM_ (candidateSet c) $ \cs' ->
-                        say (show cs')
+                      when (humanReadable config) . liftIO $ do
+                        logV ("Found: " ++ item)
+                        forM_ (candidateSet c) $ \cs' ->
+                            logV ("    -: " ++ pp p cs')
                       lift $ markProven item
                       -- liftIO $ printProof pf
               either (say . show) return $ e
-        _ ->
-          forM_ toBeProven (markProven . fst)
+        _ -> do
+          forM_ toBeProven $ \(item, cs) -> do
+            when (humanReadable config) . liftIO $ do
+              logV ("Found: " ++ show item)
+              forM_ (candidateSet $ head cs) $ \cs' ->
+                  logV ("    -:" ++ pp p cs')
+            markProven item
 
     -- onProverError
     --   :: (PartialHistory h)
