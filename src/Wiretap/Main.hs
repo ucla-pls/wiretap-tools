@@ -242,7 +242,7 @@ runCommand args config = do
 
   onCommand "check" $
     (\e -> return (e >-> PM.scan' (\i e' -> (i+1, Unique i e')) 0))
-    >=> checkConsistency
+    >=> checkConsistency p
     >=> print
 
   where
@@ -389,6 +389,10 @@ proveCandidates config p findCandidates toString events = do
       -- Find candidates
       candidates <- findCandidates chunk <$> get
       say $ "Found " ++ show (length candidates) ++ " candidate(s)."
+
+      when (verbose config) . liftIO . forM_ candidates $ \ c -> do
+        logV $ " -+ " ++  L.intercalate " ++ " (map (pp p) . S.toList $ candidateSet c)
+
 
       -- First we apply filters
       let fs = getFilter (filters config)

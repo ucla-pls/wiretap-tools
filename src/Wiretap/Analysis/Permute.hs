@@ -96,7 +96,9 @@ phiRead writes cdf mh r (l, v) =
     rvwrites ->
       Or $
 -- TODO: Consider adding something on the lines of
---      (And [ r ~> w' | (_, w') <- rwrites, not (mhb mh r w')]):
+      (if all (\w -> r < w) rvwrites then
+        ((And [ r ~> w' | (_, w') <- rwrites, not (mhb mh r w')]):)
+        else id)
 -- to fix the problem that sometimes we load things from the default value.
       [ And
         -- If the w is the same thread as r, it is executable, because the thread already have

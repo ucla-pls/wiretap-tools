@@ -15,6 +15,8 @@ import           Data.Maybe
 import           Data.Unique
 import           Wiretap.Data.Event
 import           Wiretap.Data.History
+import           Wiretap.Data.Program
+import           Wiretap.Format.Text
 
 data Consistency = Consistency
   { _values :: M.Map Location (UE, Value)
@@ -24,8 +26,8 @@ data Consistency = Consistency
 
 makeLenses ''Consistency
 
-check :: Consistency -> UE -> Either String Consistency
-check cn ue@(Unique _ e) =
+check :: Program -> Consistency -> UE -> Either String Consistency
+check p cn ue@(Unique _ e) =
   case operation e of
     Acquire l ->
       case cn^..locks.traverse.at(l)._Just of
@@ -49,24 +51,25 @@ check cn ue@(Unique _ e) =
           | v' == v ->
             Right cn
           | otherwise ->
-            Left $ "Last value written to " ++ show l ++ " was: " ++ show (a, v')
+            Left $ "Last value written to " ++ pp p l ++ " was: " ++ show (pp p a, pp p v')
         Nothing ->
-          trace ("No value written to " ++ show l) $ Right cn
+          trace (pp p ue ++ ": no value") $ Right cn
     Write l v ->
       Right $ cn & values.at l ?~ (ue, v)
     _ -> Right cn
 
 
-check' :: Either String Consistency -> UE -> Either String Consistency
-check' esc e =
+check' :: Program -> Either String Consistency -> UE -> Either String Consistency
+check' p esc e =
   case esc of
     Right x ->
-      either (Left . ((show e ++ ": ") ++)) Right $ check x e
+      either (Left . ((pp p e ++ ": ") ++)) Right $ check p x e
     _ -> esc
 
 checkConsistency ::
   Monad m
-  => Producer UE m ()
+  => Program
+  -> Producer UE m ()
   -> m (Either String Consistency)
-checkConsistency =
-  P.fold check' (Right (Consistency M.empty M.empty)) id
+checkConsistency p =
+  P.fold (check' p) (Right (Consistency M.empty M.empty)) id
