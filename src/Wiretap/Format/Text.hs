@@ -2,7 +2,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 module Wiretap.Format.Text
   ( pp
-  , PP
+  , PP (..)
   )
 where
 
@@ -15,66 +15,81 @@ import Data.Unique
 import Wiretap.Data.Event
 import Wiretap.Data.Program
 
-data PP a = PP Program a
+data PP a = PP !Program !a
 
 pp :: Show (PP a) => Program -> a -> String
 pp p = show . PP p
 
 instance Show (PP Thread) where
-  show (PP _ (Thread t)) =
-    "t" ++ show t
+  showsPrec _ (PP _ t) = showsThread t
+
+showsThread :: Thread -> ShowS
+showsThread (Thread t )=
+  showChar 't' . shows t
+{-# INLINEABLE showsThread #-}
 
 instance Show (PP Event) where
-  show (PP p e) =
-    let op = show (order e) in
-    pp p (thread e)
-      ++ "." ++ (replicate (4 - length op) '0') ++ op
-      ++ " " ++ pp p (operation e)
+  showsPrec _ (PP p e) =
+    showsThread (thread e)
+    . showChar '.' 
+    . shows (order e)
+    . showChar ' '
+    . shows (PP p (operation e))
+  {-# INLINE showsPrec #-}
+
+spp :: Show (PP a) => Program -> a -> ShowS
+spp p = shows . PP p
+{-# INLINE spp #-}
 
 instance Show (PP Operation) where
-  show (PP p o) =
-    L.intercalate " " $ case o of
-      Synch i-> ["synch", show i]
+  showsPrec _ (PP p o) =
+    case o of
+      Synch i-> showString "synch" . showChar ' ' . shows i
 
-      Fork t -> ["fork",  pp p t]
-      Join t -> ["join", pp p t]
+      Fork t -> showString "fork" . showChar ' ' . showsThread t
+      Join t -> showString "join" .showChar ' ' . showsThread t
 
-      Request r -> ["request", pp p r]
-      Acquire r -> ["acquire", pp p r]
-      Release r -> ["release", pp p r]
+      Request r -> showString "request" .showChar ' ' . showsRef r
+      Acquire r -> showString "acquire" . showChar ' ' . showsRef r
+      Release r -> showString "release" . showChar ' ' . showsRef r
 
-      Begin -> ["begin"]
-      End -> ["end"]
+      Begin -> showString "begin"
+      End -> showString "end"
 
-      Branch -> ["branch"]
+      Branch -> showString "branch"
 
-      Enter r m -> ["enter", pp p r, pp p m ]
+      Enter r m -> showString "enter" . showChar ' ' . showsRef r . showChar ' ' . spp p m 
 
-      Read l v -> ["read", pp p l, pp p v]
-      Write l v -> ["write", pp p l, pp p v]
-
+      Read l v -> showString "read" . showChar ' ' . spp p l . showChar ' ' . showsValue v
+      Write l v -> showString "write" . showChar ' ' . spp p l . showChar ' ' .  showsValue v
+  {-# INLINE showsPrec #-}
 
 instance Show (PP Location) where
-  show (PP p l) =
+  showsPrec _ (PP p l) =
     case l of
       Dynamic r f ->
-        pp p r ++ "." ++ pp p f
+        showsRef r . showChar '.' . spp p f
       Static f ->
-        pp p f
+        spp p f
       Array r i ->
-        pp p r ++ "[" ++ show i ++ "]"
+        showsRef r . showChar '[' . shows i . showChar ']'
+  {-# INLINE showsPrec #-}
 
 instance Show (PP Value) where
-  show (PP _ value) =
-    case value of
-      Byte v -> "i8!" ++ showHex v ""
-      Char v -> show v
-      Short v -> "i16!" ++ showHex v ""
-      Integer v -> "i32!" ++ showHex v ""
-      Long v -> "i64!" ++ showHex v ""
-      Float v -> "f32!" ++ showHex v ""
-      Double v -> "f64!" ++ showHex v ""
-      Object v -> "r!" ++ showHex v ""
+  showsPrec _ (PP _ v) = showsValue v
+
+showsValue :: Value -> ShowS
+showsValue value =
+  case value of
+    Byte v -> showString "i8!" . showHex v 
+    Char v -> shows v
+    Short v -> showString "i16!" . showHex v 
+    Integer v -> showString "i32!" . showHex v
+    Long v -> showString "i64!" . showHex v 
+    Float v -> showString "f32!" . showHex v 
+    Double v -> showString "f64!" .  showHex v 
+    Object v -> showString "r!" . showHex v 
+{-# INLINE showsValue #-}
 
 instance Show (PP Field) where
   show (PP p f) = fieldName p f
@@ -83,8 +98,12 @@ instance Show (PP Method) where
   show (PP p m) = methodName p m
 
 instance Show (PP Ref) where
-  show (PP _ (Ref r)) =
-    "r!" ++ showHex r ""
+  showsPrec _ (PP _ r) = showsRef r
+
+showsRef :: Ref -> ShowS
+showsRef (Ref r) =
+  showString "r!" . showHex r
+{-# INLINE showsRef #-}
 
 instance Show (PP Instruction) where
   show (PP p i) =

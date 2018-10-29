@@ -2,7 +2,7 @@
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 0c3fae641a7b9b0257f579d510542fcbe8dedff515df6f020c08f3a7017f349e
+-- hash: 2587918b498c9e41eb2c7e0886e0b9d3ed70ebd976581bdc2a5ed6c7420e4c53
 
 name:           wiretap-tools
 version:        0.1.0.0
@@ -21,7 +21,7 @@ extra-source-files:
 library
   hs-source-dirs:
       src
-  ghc-options: -Wall
+  ghc-options: -Wall -O3
   build-depends:
       QuickCheck >=2.8
     , base >=4.9 && <4.12

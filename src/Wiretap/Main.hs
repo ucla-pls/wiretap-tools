@@ -43,6 +43,7 @@ import           Pipes
 import qualified Pipes.Lift                       as PL
 import qualified Pipes.Missing                    as PM
 import qualified Pipes.Prelude                    as P
+import qualified Pipes.Internal                   as PI
 
 import           Wiretap.Analysis.Count
 import           Wiretap.Format.Binary
@@ -193,6 +194,27 @@ readConfig args = do
     getLongOption = getArg args . longOption
     getArgument = getArg args . argument
 
+prettyPrintEvents :: Program.Program -> Config -> Proxy X () () Event IO () -> IO ()
+prettyPrintEvents !p !config events 
+  | humanReadable config = do
+    runEffect $ for events $ \e -> do
+      PI.M $ do
+        print $ PP p e
+        i <- instruction p e
+        putStr "        "
+        putStrLn $ Program.instName p i
+        return (PI.Pure ())
+  | otherwise = do
+    let 
+      go !pipe = 
+        case pipe of 
+          PI.Respond e f -> print (PP p e) >>= go . f 
+          PI.M m -> m >>= go
+          PI.Pure e -> return e
+          _ -> undefined
+    go events
+    -- runEffect $ for events helper
+
 runCommand :: Arguments -> Config -> IO ()
 runCommand args config = do
   p <- getProgram config
@@ -201,14 +223,7 @@ runCommand args config = do
     pprint :: Show (PP a) => a -> String
     pprint = pp p
 
-  onCommand "parse" $ \events -> do
-    runEffect $ for events $ \e -> do
-      i <- lift (instruction p e)
-      lift $ do
-        putStrLn $ pprint e
-        when (humanReadable config) $ do
-          putStr "        "
-          putStrLn $ Program.instName p i
+  onCommand "parse" $ prettyPrintEvents p config
 
   onCommand "count" $
     countEvents >=> print

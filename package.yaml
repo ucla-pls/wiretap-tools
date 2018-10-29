@@ -48,6 +48,7 @@ library:
   source-dirs: src
   ghc-options:
     -Wall
+    -O3
 
 tests:
   wt-test:
