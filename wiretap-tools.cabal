@@ -1,8 +1,8 @@
--- This file has been generated from package.yaml by hpack version 0.20.0.
+-- This file has been generated from package.yaml by hpack version 0.28.2.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 6f9a4b853cd54be5b1dd1db1ad17fa9f940aaf35ad567964a6b8c8173a4ea2f6
+-- hash: 0c3fae641a7b9b0257f579d510542fcbe8dedff515df6f020c08f3a7017f349e
 
 name:           wiretap-tools
 version:        0.1.0.0
@@ -14,7 +14,6 @@ license:        GPL-3
 license-file:   LICENSE
 build-type:     Simple
 cabal-version:  >= 1.10
-
 extra-source-files:
     ChangeLog.md
     README.mkd
@@ -25,13 +24,13 @@ library
   ghc-options: -Wall
   build-depends:
       QuickCheck >=2.8
-    , base >=4.9 && <4.10
+    , base >=4.9 && <4.12
     , binary
     , bytestring >=0.10.8.1
     , containers >=0.5.7.1
     , directory >=1.2.6.2
     , docopt
-    , either >=4.4.1.1
+    , either
     , exceptions
     , fgl
     , filepath >=1.4.1.0
@@ -82,13 +81,13 @@ executable wiretap-tools
   ghc-options: -O3 -threaded -Wall -funbox-strict-fields
   build-depends:
       QuickCheck >=2.8
-    , base >=4.9 && <4.10
+    , base >=4.9 && <4.12
     , binary
     , bytestring >=0.10.8.1
     , containers >=0.5.7.1
     , directory >=1.2.6.2
     , docopt
-    , either >=4.4.1.1
+    , either
     , exceptions
     , fgl
     , filepath >=1.4.1.0
@@ -114,13 +113,13 @@ test-suite wt-test
   ghc-options: -threaded -funbox-strict-fields
   build-depends:
       QuickCheck >=2.8
-    , base >=4.9 && <4.10
+    , base >=4.9 && <4.12
     , binary
     , bytestring >=0.10.8.1
     , containers >=0.5.7.1
     , directory >=1.2.6.2
     , docopt
-    , either >=4.4.1.1
+    , either
     , exceptions
     , fgl
     , filepath >=1.4.1.0
@@ -147,13 +146,13 @@ benchmark wt-prof
   ghc-options: -O3 -threaded -fprof-auto -funbox-strict-fields -rtsopts
   build-depends:
       QuickCheck >=2.8
-    , base >=4.9 && <4.10
+    , base >=4.9 && <4.12
     , binary
     , bytestring >=0.10.8.1
     , containers >=0.5.7.1
     , directory >=1.2.6.2
     , docopt
-    , either >=4.4.1.1
+    , either
     , exceptions
     , fgl
     , filepath >=1.4.1.0

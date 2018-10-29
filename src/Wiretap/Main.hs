@@ -20,7 +20,7 @@ import           Control.Applicative
 import           Control.Lens                     (over, _2)
 import           Control.Monad
 import           Control.Monad.Catch
-import           Control.Monad.Trans.Either
+import           Control.Monad.Trans.Except
 import           Control.Monad.Trans.State.Strict (StateT)
 import           Control.Monad.State.Class
 import           Control.Monad.Writer
@@ -489,7 +489,7 @@ proveCandidates config p findCandidates toString events = do
       -> a -> m' (Either (IO String) a)
     getFilter filterNames = inner
       where
-        inner c = runEitherT $ mapM ($c) fs $> c
+        inner c = runExceptT $ mapM ($c) fs $> c
         fs = map (toFilter p config toString) filterNames
 
     getProver name =
@@ -509,12 +509,12 @@ toFilter :: (MonadIO m, Candidate t, MonadState ProverState m) =>
   -> (t -> IO String)
   -> [Char]
   -> t
-  -> EitherT (IO [Char]) m ()
+  -> ExceptT (IO [Char]) m ()
 toFilter p config toString name c =
   case name of
     "lockset" -> do
       lm <- gets lockMap
-      void $ first (\shared -> do
+      void $ withExceptT (\shared -> do
           locks <- forM shared $ \(r, (a, b)) -> do
             inst_a <- instruction p . normal $ a
             inst_b <- instruction p . normal $ b
@@ -530,7 +530,7 @@ toFilter p config toString name c =
       mg <- gets mhbGraph
       forM_ (crossproduct1 . S.toList $ candidateSet c) $ \(a, b) ->
         if mhb mg a b
-        then left $ do
+        then throwE $ do
             inst_a <- instruction p . normal $ a
             inst_b <- instruction p . normal $ b
             return $ L.intercalate "\n"
@@ -543,11 +543,11 @@ toFilter p config toString name c =
     "ignored" -> do
       str <- liftIO $ toString c
       if S.member str (ignoreSet config)
-        then left . return $ "In ignore set"
+        then throwE . return $ "In ignore set"
         else return ()
 
     "reject" ->
-      left . return $ "Rejected"
+      throwE . return $ "Rejected"
 
     _ ->
       error $ "Unknown filter " ++ name
@@ -598,9 +598,6 @@ cnf2dot p h cnf = unlines $
       [ printAtom "black" True e ]
     printConjunction color es =
       map (printAtom color False) es
-
-first :: (Monad m) => (e -> e') -> EitherT e m a -> EitherT e' m a
-first f = bimapEitherT f id
 
 data Bug
   = BDataRace DataRace

@@ -34,7 +34,7 @@ import           Data.Functor
 import qualified Data.Map                          as M
 import           Data.Maybe
 import           Data.Monoid
-import           Control.Monad.Trans.Either
+import           Control.Monad.Trans.Except
 import qualified Data.Set                          as S
 import qualified Data.List                         as L
 import           Data.Unique
@@ -385,13 +385,15 @@ data ValueSet = ValueSet
   , vsBranch :: ! Bool
   } deriving (Eq, Show)
 
-instance Monoid ValueSet where
-  mempty = ValueSet S.empty False False
-  mappend x y =
+instance Semigroup ValueSet where
+  (<>) x y =
     ValueSet
       (vsRefs x `S.union` vsRefs y)
       (vsValues x || vsValues y)
       (vsBranch x || vsBranch y)
+
+instance Monoid ValueSet where
+  mempty = ValueSet S.empty False False
 
 fromRef :: Ref -> ValueSet
 fromRef r =
@@ -454,7 +456,7 @@ locksetFilter
   :: (Candidate a, PartialHistory h, Monad m)
   => h
   -> a
-  -> EitherT [(Ref, (UE,UE))] m a
+  -> ExceptT [(Ref, (UE,UE))] m a
 locksetFilter h =
   locksetFilter' $ lockMap h
 
@@ -462,11 +464,11 @@ locksetFilter'
   :: (Candidate a, Monad m)
   => LockMap
   -> a
-  -> EitherT [(Ref, (UE,UE))] m a
+  -> ExceptT [(Ref, (UE,UE))] m a
 locksetFilter' lm c = do
  case L.concatMap (M.assocs) intersections of
    [] -> return c
-   ls -> left $ ls
+   ls -> throwE $ ls
  where
    intersections =
      L.map (uncurry (sharedLocks lm)) $ combinations (S.toList $ candidateSet c)

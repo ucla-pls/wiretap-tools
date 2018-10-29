@@ -28,8 +28,6 @@ import           Data.Unique
 import           Wiretap.Analysis.HBL
 import           Wiretap.Data.History
 
-import Debug.Trace
-
 
 newtype Z3T s e m a = Z3T
   { _unZ3 :: ReaderT (Z3EnvC, Z3HBLSolver s e) m a

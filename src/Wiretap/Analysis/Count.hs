@@ -31,9 +31,8 @@ data Counter = Counter
   , enters   :: !Int
   } deriving (Show)
 
-instance Monoid Counter where
-  mempty = Counter 0 0 0 0 0 0 0 0 0 0 0 0
-  mappend a b = Counter
+instance Semigroup Counter where
+  (<>) a b = Counter
     { synchs   = sum synchs
     , acquires = sum acquires
     , requests = sum requests
@@ -49,6 +48,9 @@ instance Monoid Counter where
     }
     where
       sum f = f a + f b
+
+instance Monoid Counter where
+  mempty = Counter 0 0 0 0 0 0 0 0 0 0 0 0
 
 incrCounter :: Counter -> Event -> Counter
 incrCounter c Event {operation=o} =

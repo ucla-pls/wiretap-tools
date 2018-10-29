@@ -21,9 +21,8 @@ data Group a = Group
   , enters   :: [a]
   } deriving (Show)
 
-instance Monoid (Group a) where
-  mempty = Group [] [] [] [] [] [] [] [] [] [] [] []
-  mappend a b = Group
+instance Semigroup (Group a) where
+  (<>) a b = Group
     { synchs   = add' synchs
     , acquires = add' acquires
     , requests = add' requests
@@ -39,6 +38,9 @@ instance Monoid (Group a) where
     }
     where
       add' f = f a ++ f b
+
+instance Monoid (Group a) where
+  mempty = Group [] [] [] [] [] [] [] [] [] [] [] []
 
 fromEvent :: Event -> Group Event
 fromEvent = addOn id mempty
