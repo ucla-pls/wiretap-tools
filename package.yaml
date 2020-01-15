@@ -1,0 +1,75 @@
+name:                wiretap-tools
+version:             0.1.0.0
+synopsis:            Tools for analysing the output of Wiretap.
+license:             GPL-3
+license-file:        LICENSE
+author:              Christian Gram Kalhauge
+maintainer:          kalhauge@cs.ucle.edu
+category:            Language
+extra-source-files:  
+  - ChangeLog.md
+  - README.mkd
+
+dependencies:
+- QuickCheck >= 2.8
+- base >=4.9 && <4.12
+- binary
+- bytestring >= 0.10.8.1
+- containers >= 0.5.7.1
+- directory >= 1.2.6.2
+- docopt
+- either >= 4.4.1.1
+- filepath >= 1.4.1.0
+- lens >= 4.14
+- mtl >= 2.2.1
+- pipes
+- pipes-binary >= 0.4.1
+- pipes-bytestring
+- pipes-parse >= 3.0.7
+- transformers >= 0.5.2.0
+- vector
+- z3 >= 4.1.0
+- fgl
+- exceptions
+- either
+
+executable:
+  main: Main.hs
+  source-dirs: app
+  dependencies:
+    - wiretap-tools
+  ghc-options:
+    -O3
+    -threaded
+    -Wall
+    -funbox-strict-fields
+
+library:
+  source-dirs: src
+  ghc-options:
+    -Wall
+    -O3
+
+tests:
+  wt-test:
+    main: Spec.hs
+    source-dirs: test-suite
+    dependencies:
+      - wiretap-tools
+      - hspec
+    ghc-options:
+      -threaded
+      -funbox-strict-fields
+
+benchmarks:
+  wt-prof:
+    main: Main.hs
+    source-dirs: app
+    dependencies:
+      - wiretap-tools
+    ghc-options:
+      -O3
+      -threaded
+      -fprof-auto
+      -funbox-strict-fields
+      -rtsopts

@@ -1,5 +1,5 @@
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase        #-}
 module Wiretap.Data.History where
 
 import           Data.Foldable
@@ -19,16 +19,28 @@ newtype History = History
 
 class PartialHistory h where
   enumerate :: h -> [UE]
+  hfold :: (Monoid m) => (UE -> m) -> h -> m
+  hfoldr :: (UE -> b -> b) -> b -> h -> b
 
 instance PartialHistory History where
   enumerate =
     byIndex . toList . toVector
+  {-# INLINE enumerate #-}
+  hfold f = foldMap f . enumerate
+  hfoldr f b = foldr f b . enumerate
 
 instance PartialHistory [UE] where
   enumerate = id
+  {-# INLINE enumerate #-}
+  hfold = foldMap
+  hfoldr = foldr
 
 instance PartialHistory (S.Set (UE)) where
   enumerate = S.toAscList
+
+  {-# INLINE enumerate #-}
+  hfold = foldMap
+  hfoldr = foldr
 
 simulate :: PartialHistory h
   => (UE -> a -> a)
@@ -36,11 +48,15 @@ simulate :: PartialHistory h
 simulate f a h =
   foldl' (flip f) a (enumerate h)
 
+{-# INLINE simulate #-}
+
 simulateReverse :: PartialHistory h
   => (UE -> a -> a)
   -> a -> h -> a
 simulateReverse f a h =
   foldl' (flip f) a (reverse . enumerate $ h)
+
+{-# INLINE simulateReverse #-}
 
 simulateM :: (PartialHistory h, Monad m)
   => (UE -> m a)
@@ -48,6 +64,8 @@ simulateM :: (PartialHistory h, Monad m)
 simulateM f h =
   zipWith (\u e -> const e <$> u) uniques <$> mapM f uniques
   where uniques = enumerate h
+
+{-# INLINE simulateM #-}
 
 fromEvents :: Foldable t
    => t Event
@@ -72,6 +90,21 @@ withPair (a, b) h =
   where
     isNotAB e = e /= a && e /= b
 
+prefixContaining
+  :: PartialHistory h
+  => S.Set UE
+  -> h
+  -> [UE]
+prefixContaining es h =
+  go es (enumerate h)
+  where
+    go es' _ | null es' = []
+    go _ [] = []
+    go es' (e: h') =
+      e : if e `S.member` es'
+          then go (e `S.delete` es') h'
+          else go es' h'
+
 byThread :: PartialHistory h
   => h
   -> M.Map Thread [UE]
@@ -80,6 +113,9 @@ byThread =
   where
   step u@(Unique _ e) =
     updateDefault [] (u:) $ thread e
+
+threadOf :: UE -> Thread
+threadOf = thread . normal
 
 onEvent
   :: PartialHistory h
@@ -90,6 +126,8 @@ onEvent
 onEvent g f =
   simulateReverse (\u -> maybe id ((:) . f u) . g . operation . normal $ u) []
 
+{-# INLINE onEvent #-}
+
 onReads
   :: PartialHistory h
   => (UE -> (Location, Value) -> a)
@@ -97,7 +135,9 @@ onReads
   -> [a]
 onReads = onEvent filter'
   where filter' (Read l v) = Just (l, v)
-        filter' _ = Nothing
+        filter' _          = Nothing
+
+{-# INLINE onReads #-}
 
 onWrites
   :: PartialHistory h
@@ -106,7 +146,9 @@ onWrites
   -> [a]
 onWrites = onEvent filter'
   where filter' (Write l v) = Just (l, v)
-        filter' _ = Nothing
+        filter' _           = Nothing
+
+{-# INLINE onWrites #-}
 
 onAcquires
   :: PartialHistory h
@@ -115,7 +157,9 @@ onAcquires
   -> [a]
 onAcquires = onEvent filter'
   where filter' (Acquire r) = Just r
-        filter' _ = Nothing
+        filter' _           = Nothing
+
+{-# INLINE onAcquires #-}
 
 onRequests
   :: PartialHistory h
@@ -124,4 +168,6 @@ onRequests
   -> [a]
 onRequests = onEvent filter'
   where filter' (Request r) = Just r
-        filter' _ = Nothing
+        filter' _           = Nothing
+
+{-# INLINE onRequests #-}

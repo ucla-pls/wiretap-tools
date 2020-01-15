@@ -1,378 +1,474 @@
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE BangPatterns     #-}
 {-# LANGUAGE DeriveFunctor    #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RankNTypes       #-}
 {-# LANGUAGE TemplateHaskell  #-}
 module Wiretap.Analysis.Permute
-  ( kalhauge
-  , said
-  , free
-  , none
-  , permute
+  ( dfDirk
+  , dfRVPredict
+  , dfSaid
+  , dfFree
+  -- , cdfRefsOnly
+  -- , cdfBranchOnly
+  -- , cdfValuesOnly
+  , DF
+  , CDF
 
+  , PermuteProblem
+  , HBLProblem (..)
+  , generateProblem
+  , solveOne
+  , solveAll
+
+  -- * Candidates
   , Candidate(..)
-  , Proof(..)
-
-  , (~/>)
-  , (~/~)
+  , locksetFilter'
+  , locksetFilter
+  , Proof (..)
   )
   where
 
-import           Prelude                hiding (reads)
-
-import           Control.Lens           hiding (none)
-import           Control.Monad.IO.Class
-import           Control.Monad.Trans.Either
-
-import qualified Data.List              as L
-import qualified Data.Map               as M
-import           Data.PartialOrder
-import qualified Data.Set               as S
+-- import           Control.Lens                      hiding (none)
+import           Control.Monad
+import           Data.Functor
+import qualified Data.Map                          as M
+import           Data.Maybe
+import           Data.Monoid
+import           Control.Monad.Trans.Except
+import qualified Data.Set                          as S
+import qualified Data.List                         as L
 import           Data.Unique
+import           Prelude                           hiding (reads)
 
-import           Wiretap.Analysis.LIA
+import           Wiretap.Analysis.HBL
+import           Wiretap.Analysis.Lock
+import           Wiretap.Analysis.MustHappenBefore
 import           Wiretap.Data.Event
+import           Wiretap.Data.Program
 import           Wiretap.Data.History
-
 import           Wiretap.Utils
+import           Wiretap.Format.Text
 
-sc :: PartialHistory h => h -> LIA UE
-sc h =
-  And [ totalOrder es | es <- M.elems $ byThread h ]
+-- import           Data.List (intercalate)
+-- import           Debug.Trace
 
-mhb :: PartialHistory h => h -> LIA UE
-mhb h =
-  And
-  [ And
-    [ And
-      [ f ~> b
-      | f <- forks, b <- begins
-      ]
-    , And
-      [ e ~> j
-      | e <- ends, j <- joins
-      ]
-    ]
-  | (joins, forks, begins, ends) <- mhbEventsByThread
-  ]
-  where
-    mhbEventsByThread =
-      M.elems $ simulate step M.empty h
-    step u@(Unique _ e) =
-      case operation e of
-        Join t -> update u _1 t
-        Fork t -> update u _2 t
-        Begin  -> update u _3 $ thread e
-        End    -> update u _4 $ thread e
-        _      -> id
-    update u l =
-      updateDefault ([], [], [], []) (over l (u:))
 
-{-| this method expects h to be a true history, so that by thread any lock acquired
-will be released by the same thread, and that there is no cross releasing
+type PHBL = HBL UE UE
 
-TODO: Re-entreant locks.
-TODO: RWC for the lock.
-TODO: Remainders, what do we use them for.
--}
-lc :: PartialHistory h => h -> LIA UE
-lc h =
-  And
-  [ And
-    [ And
-      [ Or [ r ~> a',  r' ~> a ]
-      | ((a, r), (a', r')) <-
-          combinations lockPairs
-      , a ~/> r', r' ~/> a
-      ]
-    , And
-      [ r ~> a
-      | ((_, r), a) <-
-          crossproduct lockPairs (def [] $ M.lookup l remainders)
-      , r ~/> a
-      ]
-    ]
-  | (l, lockPairs) <- lockPairsSet
-  ]
-  where
-    (allLocks, allRemainder) =
-      unpair . M.elems $ simulate step M.empty h
-
-    lockPairsSet =
-      groupUnsortedOnFst $ concat allLocks
-
-    remainders =
-      mapOnFst $ concat allRemainder
-
-    step u@(Unique _ e) =
-      case operation e of
-        Acquire l -> update (acqf l) (thread e)
-        Release _ -> update relf (thread e)
-        _         -> id
-      where
-        acqf l (pairs, stack) =
-          (pairs, (l,u):stack)
-        relf (pairs, stack) =
-          case stack of
-            (l, acq):stack' -> ((l, (acq, u)):pairs, stack')
-            [] -> error "Can't release a lock that has not been acquired"
-
-    update = updateDefault ([], [])
-
-rwc :: PartialHistory h => h -> LIA UE
-rwc h =
-  And
-  [ Or
-    [ And $
-      [ Or [ w' ~> w, r ~> w']
-      | (_, w') <- writes
-      , w' /= w , w' ~/> w, r ~/> w'
-      ]
-      ++ if w ~/> r then [w ~> r] else []
-    | (v', w) <- writes
-    , v' == v
-    , r ~/> w
-    ]
-  | (reads, writes) <- readAndWritesBylocation
-  , (v, r) <- reads
-  , not . L.null $ (filter ((v ==) . fst )) writes
-  ]
-  where
-    readAndWritesBylocation =
-      M.elems $ simulate step M.empty h
-    step u@(Unique _ e) =
-      case operation e of
-        Read l v  -> update (v, u) _1 l
-        Write l v -> update (v, u) _2 l
-        _         -> id
-    update u f = updateDefault ([], []) (over f (u:))
-
--- | Returns the control flow to a single event, this flow jumps threads, with
--- | the Join and Fork events.
-controlFlow
+lockPairsWithRef
   :: PartialHistory h
   => h
-  -> UE
-  -> [UE]
-controlFlow h u@(Unique _ e) =
-  snd $ simulateReverse step (S.singleton (thread e), []) priorEvents
+  -> M.Map Ref ([UE], [(UE, UE)], [UE])
+lockPairsWithRef h =
+  M.map (simulateReverse pairer ([], [], [])) locksWithRef
   where
-  priorEvents =
-    takeWhile (/= u) $ enumerate h
+    pairer u@(Unique _ e) s@(dr, pairs, da)=
+      case operation e of
+        Acquire _ ->
+          case dr of
+            []    -> (dr, pairs, u:da)
+            [r]   -> ([], (u, r):pairs, da)
+            _:dr' -> (dr', pairs, da)
+            -- Do not report reentrant locks
+        Release _ ->
+          (u:dr, pairs, da)
+        _ -> s
+    locksWithRef =
+      mapOnFst $ onEvent filter' (flip (,)) h
+      where
+        filter' (Acquire l) = Just l
+        filter' (Release l) = Just l
+        filter' _           = Nothing
 
-  step u'@(Unique _ e') s@(threads, events) =
-    case operation e' of
-      Fork t | t `S.member` threads ->
-        (thread e' `S.insert` threads, u':events)
-      Join t | thread e' `S.member` threads ->
-        (t `S.insert` threads, u':events)
-      _ | thread e' `S.member` threads ->
-        (threads, u':events)
-      _ -> s
+phiRead
+  :: M.Map Location [(Value, UE)]
+  -> (UE -> PHBL)
+  -> MHB
+  -> UE -> (Location, Value)
+  -> PHBL
+phiRead writes cdf mh r (l, v) =
+  case [ w | (v', w) <- rwrites , v' == v, not $ mhb mh r w ] of
+    [] ->
+      And [ r ~> w' | (_, w') <- rwrites, not (mhb mh r w')]
+      -- If there is no writes with the same value, that not is ordered
+      -- after the read, then assume that the read must be reading
+      -- something that was written before, ei. ordered before all other writes.
+    rvwrites ->
+      Or $
+-- TODO: Consider adding something on the lines of
+      (if all (\w -> r < w) rvwrites then
+        ((And [ r ~> w' | (_, w') <- rwrites, not (mhb mh r w')]):)
+        else id)
+-- to fix the problem that sometimes we load things from the default value.
+      [ And
+        -- If the w is the same thread as r, it is executable, because the thread already have
+        -- the value of v, because else r would not be executable.
+        . (if threadOf w /= threadOf r then (cdf w :) else id)
+        -- If we already know w -mh-> r, don't redo it.
+        . (if not $ mhb mh w r then (w ~> r :) else id)
+        $ [ case () of
+              ()
+                | mhb mh w w' ->
+                   r ~> w'
+                | mhb mh w' r ->
+                  w' ~> w
+                | otherwise ->
+                   Or [ w' ~> w , r ~> w']
+          | (_, w') <- rwrites
+          , w' /= w
+          -- this is true if w' -mh-> w
+          , not $ mhb mh w' w
+          -- this is true if r -mh-> w'
+          , not $ mhb mh r w'
+          ]
+      | w <- rvwrites
+      -- It is automatically false if r -mh-> w
+      , not $ mhb mh r w
+      -- It is automatically false if there exists a write between w -mh-> w' -mh-> r
+      , not $ any (\(_, w') -> mhb mh w w' && mhb mh w' r) rwrites
+      ]
+  where
+    rwrites = fromMaybe [] $ M.lookup l writes
+
+phiAcq
+  :: (M.Map Ref ([UE], [(UE, UE)], [UE]))
+  -> (UE -> PHBL)
+  -> MHB
+  -> UE
+  -> Ref
+  -> PHBL
+phiAcq lpwr cdf mh e ref' =
+  And
+  [ And
+    [ Or
+      . ( e ~?> a )
+      $ [ And
+          . ( r ~?> e )
+          $ [cdf r]
+        ]
+    | (a, r) <- pairs
+    -- Don't match yourself
+    , e /= a
+    -- if e -mh-> a then this is true
+    , not $ mhb mh e a
+    -- if r -mh-> a then it is fine, but only if the thread is the same,
+    -- because else we can not be guaranteed that cdf r is true.
+    , not $ mhb mh r e && threadOf r == threadOf e
+    ]
+  , And
+    [ e ~> a
+    | a <- da
+    , e /= a
+    -- Automatically true if e -mh-> a
+    , not $ mhb mh e a
+    ]
+  ]
+  where
+    e' ~?> a' = (if not $ mhb mh e' a' then (e' ~> a':) else id)
+    (_, pairs, da) =
+      case M.lookup ref' lpwr of
+        Just pairs' -> pairs'
+        Nothing -> error $ "The ref " ++ show ref' ++ " has no lock-pairs. (Should not happen)"
+
+phiExecE
+  :: CDF
+  -> (UE -> PHBL)
+  -> S.Set UE
+  -> PHBL
+phiExecE cdf sc es =
+  And $ concurrent es :
+  [ And [ cdf mempty e, sc e ]
+  | e <- S.toList es
+  ]
+
+type CDF = ValueSet -> UE -> PHBL
+type DF = ValueSet -> Value -> Bool
+
+solveAll
+  :: (HBLSolver UE UE m)
+  => PermuteProblem a
+  -> [a]
+  -> m (Maybe [a])
+solveAll p as = do
+  b <- sat . Or $ map (probGenerate p) as
+  return $ if b then Just as else Nothing
+
+solveOne
+  :: (HBLSolver UE UE m)
+  => PermuteProblem a
+  -> [a]
+  -> m (Maybe a)
+solveOne p (a:as) = do
+  b <- sat (probGenerate p a)
+  if b then return $ Just a else solveOne p as
+solveOne _ [] =
+  return Nothing
+
+type PermuteProblem = HBLProblem UE UE
+
+generateProblem ::
+  (PartialHistory h, Candidate a)
+  => (LockMap, MHB, DF)
+  -> h
+  -> PermuteProblem a
+generateProblem (lm, mh, df) hist =
+  HBLProblem
+    { probGenerate = phiExecE cdf reInsert . candidateSet
+    , probBase = And [sc]
+    , probElements = h'
+    , probSymbols = enumerate hist
+    , probSymbolDef = (vars !!!)
+    }
+  where
+    var = Atom . Symbol
+
+    runVar ue@(Unique _ e) =
+      x -- trace (show (idx ue) ++ " --> " ++ show (bimap idx idx <$> x)) x
+      where
+        x = case operation e of
+              Read l v ->
+                phiRead writes var mh ue (l,v)
+              Acquire l ->
+                phiAcq lpwr var mh ue l
+              Begin ->
+                case mhbForkOf mh ue of
+                  Just f  -> And [f  ~> ue, cdf mempty f]
+                  Nothing -> And []
+              Join t' ->
+                case mhbEndOf mh t' of
+                  Just e' -> And [e' ~> ue, cdf mempty e']
+                  Nothing -> And []
+              Write _ v ->
+                cdf (fromValue v) ue
+              Release _ ->
+                cdf mempty ue
+              Branch ->
+                And . map (var) $
+                  filter (onlyVars (ValueSet mempty True True)) (uthread ! ue)
+              _ -> error $ "Wrong variable type: " ++ show e
+
+    sc =
+      And [ totalOrder t | t <- M.elems $ byThread h' ]
+
+    h' =
+      filter needed $ enumerate hist
+
+    reInsert ue
+      | not $ needed ue =
+        let (l, n) = lastNext ue $ fromMaybe [] $ M.lookup (threadOf ue) threadwise
+        in And . (maybe (id) ((:).(~> ue)) l) $ (maybe (id) ((:).(ue ~>)) n) []
+      | otherwise =
+        And []
+
+    threadwise = byThread hist
+
+    lastNext ue lst =
+      let
+        (before, after) = break (== ue) lst
+        b = filter needed before
+        l = if L.null b then Nothing else Just $ last b
+        n = case after of
+          [] -> Nothing;
+          _:ls -> case filter needed ls of
+            a':_ -> Just a'
+            _ -> Nothing
+      in (l, n)
+
+    needed ue@(Unique _ e) =
+      case operation e of
+        Enter _ _ -> False
+        Branch -> False
+        Request _ -> False
+        Read _ _ -> maybe False (not . null) $ M.lookup ue conflicts
+        Write _ _ ->
+          -- trace (show (eshow <$> ue) ++ " " ++ show (ue `S.member` conflictingWrites))
+           ue `S.member` conflictingWrites
+        _ -> True
+
+
+    -- A conflicting write exists if just one write event to some
+    -- place is conflicting
+    conflictingWrites =
+      S.fromList . concat . map allWrites . concat . M.elems $ conflicts
+      where
+        location (Write l _) = l
+        location _ = undefined
+        allWrites e = maybe [] (map snd) $ M.lookup (location (operation . normal $ e)) writes
+
+    -- Conflicts produces a list of pairs of all read to writes events,
+    -- we then proceed to remove all conflicts that is must happen related.
+    conflicts' :: M.Map UE [UE]
+    conflicts' =
+      mapOnFst
+      . filter (uncurry $ mhbFree mh)
+      . concat
+      $ onReads conflictsOfRead hist
+
+    conflicts = conflicts'
+      -- trace (L.intercalate "\n" . map (\(a,b) -> (show $ eshow <$> a) ++ " : " ++ show (fmap eshow <$> b) )
+      --        $ M.toList conflicts') conflicts'
+    -- Pretty print map
+
+    conflictsOfRead r (l, _) =
+      [ (r, w)
+      | (_, w) <- maybe [] id $ M.lookup l writes
+      ]
+
+    lpwr =
+      lockPairsWithRef hist
+
+    writes =
+      mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) hist
+
+    cdf vs ue =
+      And . map var $ controlFlow vs (uthread ! ue)
+
+    controlFlow :: ValueSet -> [UE] -> [UE]
+    controlFlow !vs (ue':rest) =
+      ( case operation . normal $ ue' of
+        Branch -> const [ue']
+        _ | onlyVars vs ue' -> (ue' :)
+          | otherwise -> id
+      ) $ controlFlow (vs <> valuesOf ue') rest
+    controlFlow _ [] = []
+
+    vars =
+      fromUniques
+      . map (\u -> u $> runVar u)
+      $ enumerate hist
+
+    onlyVars vs ue' =
+      case operation . normal $ ue' of
+        Read _ v  | df vs v -> True
+        Acquire l | nonreentrant lm ue' l -> True
+        Begin     -> True
+        Join _    -> True
+        _         -> False
+
+    uthread = threadAt hist
+
+threadAt :: PartialHistory h => h -> UniqueMap [UE]
+threadAt h =
+  fromUniques $ snd (simulate folder (M.empty, id) h) []
+  where
+    folder ue (threads, cont) =
+      let
+        t = threadOf ue
+        lst = maybe [] (ue:) $ M.lookup t threads
+      in
+      ( M.insert t lst threads, cont . (fmap (const lst) ue :))
+-- Dfs
+
+dfFree :: DF
+dfFree _ _ = False
+
+dfSaid :: DF
+dfSaid _ _ = True
+
+dfRVPredict :: DF
+dfRVPredict (ValueSet refs hasValue hasBranch) _ =
+  not (S.null refs) || hasValue || hasBranch
+
+dfDirk :: DF
+dfDirk (ValueSet refs hasValue hasBranch) v =
+  case v of
+    _           | hasValue || hasBranch -> True
+    (Object v') | Ref v' `S.member` refs -> True
+    _           -> False
+
+
+-- The value set.
+
+data ValueSet = ValueSet
+  { vsRefs   :: !(S.Set Ref)
+  , vsValues :: ! Bool
+  , vsBranch :: ! Bool
+  } deriving (Eq, Show)
+
+instance Semigroup ValueSet where
+  (<>) x y =
+    ValueSet
+      (vsRefs x `S.union` vsRefs y)
+      (vsValues x || vsValues y)
+      (vsBranch x || vsBranch y)
+
+instance Monoid ValueSet where
+  mempty = ValueSet S.empty False False
+
+fromRef :: Ref -> ValueSet
+fromRef r =
+  ValueSet (S.singleton r) False False
+
+fromLocation :: Location -> ValueSet
+fromLocation l =
+  case l of
+    Dynamic r _ -> fromRef r
+    Array r _   -> (fromRef r) { vsValues = True }
+    _           -> mempty
+
+fromValue :: Value -> ValueSet
+fromValue v =
+  case v of
+    Object r -> fromRef (Ref r)
+    _        -> mempty { vsValues = True }
+
+fromBranch :: ValueSet
+fromBranch =
+  mempty { vsBranch = True }
 
 -- | Get all refs known by the event at the moment of execution.
-knownRefs :: UE -> S.Set Ref
-knownRefs (Unique _ e) =
+valuesOf :: UE -> ValueSet
+valuesOf (Unique _ e) =
   case operation e of
-    Write l (Object v) ->
-      maybe S.empty S.singleton (ref l) `S.union` S.singleton (Ref v)
+    Write l _ ->
+      fromLocation l
     Read l _ ->
-      maybe S.empty S.singleton (ref l)
+      fromLocation l
     Acquire r ->
-      S.singleton r
+      fromRef r
     Release r ->
-      S.singleton r
+      fromRef r
     Request r ->
-      S.singleton r
+      fromRef r
+    Branch ->
+      fromBranch
+    Enter r _ | pointer r /= 0 ->
+      fromRef r
     _ ->
-      S.empty
+      mempty
 
--- | For a given event, choose all the reads, and locks, that needs to be
--- | consistent for this event to also be consistent.
-controlFlowDependencies
-  :: PartialHistory h
-  => h
-  -> UE
-  -> [UE]
-controlFlowDependencies h u =
- simulateReverse step ([], knownRefs u, False) (controlFlow h u)  ^. _1
-  where
-    step u'@(Unique _ e') s@(events, refs, branch) =
-      case operation e' of
-        Read _ _ | branch ->
-          over _1 (u':) s
-        Read _ (Object v) | Ref v `S.member` refs  ->
-          over _1 (u':) s
-        Acquire r ->
-          (u':events, r `S.insert` refs, branch)
-        Branch ->
-          set _3 True s
-        Enter r _ | pointer r /= 0 ->
-          over _2 (S.insert r) s
-        _ ->
-          s
-
-controlFlowConsistency
-  :: PartialHistory h
-  => [UE]
-  -> h
-  -> LIA UE
-controlFlowConsistency us h =
-  consistent (S.empty) (S.unions [ cfc u | u <- us ])
-  where
-  cfc u = S.fromAscList (controlFlowDependencies h u)
-
-  consistent visited deps =
-    And [ And $ onReads readConsitency depends
-        , And $ onAcquires lockConsitency depends
-        ]
-    where
-    depends =
-      deps S.\\ visited
-
-    visited' =
-      visited `S.union` depends
-
-    readConsitency r (l, v) =
-      -- Make sure that location has any writes
-      case M.lookup l writes of
-        Nothing ->
-          -- If no writes assume that the read is consistent, ei. Reads what it
-          -- is supposed to.
-          And []
-        Just rwrites ->
-          case [ w | (v', w) <- rwrites, v' == v, r ~/> w ] of
-            [] ->
-              -- If there is no writes with the same value, that not is ordered
-              -- after the read, then assume that the read must be reading
-              -- something that was written before, ei. ordered before all other writes.
-              -- NOTE: This assumption requires the history to be consistent.
-              And [ r ~> w' | (_, w') <- rwrites ]
-            rvwrites ->
-              Or
-              [ And $ consistent visited' (cfc w) : w ~> r :
-                [ Or [ w' ~> w, r ~> w']
-                | (_, w') <- rwrites
-                , w' /= w , w' ~/> w, r ~/> w'
-                ]
-              | w <- rvwrites
-              ]
-
-    lockConsitency a ref' =
-      -- Any acquire we test is already controlFlowConsistent, covered by the
-      -- dependencies in the controlFlowConsistencies.
-      case M.lookup a releaseFromAcquire of
-        Just r ->
-          And $
-          [ Or
-            [ r' ~> a
-              -- ^ Either the other pair has to come before the the current pair
-            , r ~> a'
-              -- ^ Or it happened afterwards
-            ]
-          | (a', r') <- pairs
-          , a' `S.member` visited'
-          , a' /= a, a' ~/> a, a' ~/> a
-          ] ++ map (~> a) dr
-            -- ^ This might be superfluous.
-            ++ map (r ~>) da
-            -- ^ If we do not have an release, make sure that we are ordered after all
-            -- other locks.
-        Nothing ->
-          And
-          [ r' ~> a
-          | (a', r') <- pairs, r' ~/> a
-          , a' `S.member` visited'
-          ]
-      where
-        (dr, pairs, da) = case M.lookup ref' lockPairsWithRef of
-          Just pairs' -> pairs'
-          Nothing ->
-            error $ "The ref " ++ show ref'
-                 ++ " has no lock-pairs. (Should not happen)"
-  writes =
-    mapOnFst $ onWrites (\w (l, v) -> (l, (v, w))) h
-
-  locksWithRef =
-    mapOnFst $ onEvent filter' (flip (,)) h
-    where
-      filter' (Acquire l) = Just l
-      filter' (Release l) = Just l
-      filter' _           = Nothing
-
-  releaseFromAcquire :: M.Map UE UE
-  releaseFromAcquire =
-    M.fromList . concatMap (^. _2) $ M.elems lockPairsWithRef
-
-  lockPairsWithRef :: M.Map Ref ([UE], [(UE, UE)], [UE])
-  lockPairsWithRef =
-    M.map (simulateReverse pairer ([], [], [])) locksWithRef
-    where
-      pairer u@(Unique _ e) s@(dr, pairs, da)=
-        case operation e of
-          Acquire _ ->
-            case dr of
-              []     -> (dr, pairs, u:da)
-              [r]    -> ([], (u, r):pairs, da)
-              _:dr'  -> (dr', pairs, da)
-          Release _ ->
-            (u:dr, pairs, da)
-          _ -> s
-
-
-(~/>) :: UE -> UE -> Bool
-(~/>) (Unique _ a) (Unique _ b) =
-  not (a !< b)
-
-(~/~) :: UE -> UE -> Bool
-(~/~) a b =
-  a ~/> b && b ~/> a
-
+type CandidateSet = S.Set UE
 
 class Candidate a where
-  toEventPair :: a -> (UE, UE)
+  candidateSet :: a -> CandidateSet
+  prettyPrint :: Program -> a -> IO String
+  prettyPrint p a =
+      L.intercalate " " . L.sort . L.map (pp p) <$>
+        mapM (instruction p . normal) (S.toList $ candidateSet a)
 
 data Proof a = Proof
   { candidate   :: a
-  , constraints :: LIA UE
+  , constraints :: PHBL
   , evidence    :: [UE]
   } deriving Functor
 
-type Prover = forall h . PartialHistory h => h -> (UE, UE) -> LIA UE
-
-{-| permute takes partial history and two events, if the events can be arranged
-next to each other return. -}
-permute
-  :: (PartialHistory h, MonadIO m, Candidate a)
-  => Prover
-  -> h
+locksetFilter
+  :: (Candidate a, PartialHistory h, Monad m)
+  => h
   -> a
-  -> EitherT String m (Proof a)
-permute prover h a = do
-  solution <- solve (enumerate h) cnts
-  case solution of
-    Just hist ->
-      return $ Proof a cnts (withPair pair hist)
-    Nothing ->
-      left "Could not solve the constraints."
-  where
-    pair = toEventPair a
-    cnts = prover h pair
+  -> ExceptT [(Ref, (UE,UE))] m a
+locksetFilter h =
+  locksetFilter' $ lockMap h
 
-said :: Prover
-said h (a, b) =
-  And $ Eq a b :
-    ([ sc, mhb, lc, rwc ] <*> [h])
-
-kalhauge :: Prover
-kalhauge h (a, b) =
-  And $ Eq a b :
-    ([ sc, mhb, controlFlowConsistency [a, b]] <*> [h])
-
-free :: Prover
-free h (a, b) =
-  And $ Eq a b :
-    ([ sc, mhb ] <*> [h])
-
-none :: h -> (UE, UE) -> LIA UE
-none _ (a, b) =
-  And [Eq a b]
+locksetFilter'
+  :: (Candidate a, Monad m)
+  => LockMap
+  -> a
+  -> ExceptT [(Ref, (UE,UE))] m a
+locksetFilter' lm c = do
+ case L.concatMap (M.assocs) intersections of
+   [] -> return c
+   ls -> throwE $ ls
+ where
+   intersections =
+     L.map (uncurry (sharedLocks lm)) $ combinations (S.toList $ candidateSet c)

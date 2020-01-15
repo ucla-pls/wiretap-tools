@@ -1,0 +1,6 @@
+resolver: lts-12.14
+extra-deps:
+        #- pipes-binary-0.4.1
+    #  - ../z3-haskell
+  #- pipes-4.1.9
+        - z3-4.3.1

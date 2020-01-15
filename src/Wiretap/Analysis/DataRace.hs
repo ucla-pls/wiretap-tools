@@ -9,11 +9,14 @@ import           Prelude                  hiding (reads)
 import           Data.Function            (on)
 import qualified Data.List                as L
 import qualified Data.Map                 as M
+import qualified Data.Set                 as S
 import           Data.Unique
 
-import           Wiretap.Analysis.Permute
+import Control.Monad (liftM2)
+
 import           Wiretap.Data.Event
 import           Wiretap.Data.History
+import           Wiretap.Analysis.Permute
 import           Wiretap.Utils
 
 sharedLocations :: PartialHistory h
@@ -23,7 +26,7 @@ sharedLocations h =
   filter (not . L.null . snd) . map combineLocation $ byLocation writes
   where
     combineLocation (l, ws) =
-      (l, filter (uncurry (~/~)) pairs)
+      (l, filter (uncurry ((/=) `on` threadOf)) pairs)
       where
         pairs =
           combinations ws ++ readwriteconflicts
@@ -44,16 +47,16 @@ sharedLocations h =
 
 data DataRace = DataRace
   { location :: Location
-  , eventA        :: UE
-  , eventB        :: UE
+  , eventA   :: UE
+  , eventB   :: UE
   } deriving (Show, Eq)
 
 instance Ord DataRace where
-  compare = compare `on` toEventPair
+  compare = compare `on` (liftM2 (,) eventA eventB)
 
 instance Candidate DataRace where
-  toEventPair (DataRace _ a b) =
-    (a, b)
+  candidateSet (DataRace _ a b) =
+    S.fromList [a, b]
 
 raceCandidates :: PartialHistory h
   => h

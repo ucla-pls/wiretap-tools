@@ -26,6 +26,8 @@ newtype Thread = Thread
   { threadId :: Int32
   } deriving (Show, Eq, Ord)
 
+type Order = Int32
+
 instance Binary Thread where
   put = putInt32be . threadId
   get = Thread <$> getInt32be
@@ -38,9 +40,16 @@ prop_ThreadIsBinary = prop_isBinary
 
 data Event = Event
   { thread    :: !Thread
-  , order     :: !Int32
+  , order     :: !Order
   , operation :: !Operation
   } deriving (Show, Eq, Ord)
+
+eshow :: Event -> String
+eshow e =
+  "t" ++ show (threadId.thread $ e) ++ "." ++ show (order e) ++ "!" ++ show (operation e)
+
+ppEvent :: Event -> String
+ppEvent e = 't' : (show (threadId $ thread e) ++ '.' : show (order e))
 
 instance PartialOrder Event where
   cmp a b | thread a == thread b =
@@ -227,24 +236,24 @@ instance Arbitrary Value where
     ]
 
 data Operation
-  = Synch Int
+  = Synch !Int
 
-  | Fork Thread
-  | Join Thread
+  | Fork !Thread
+  | Join !Thread
 
-  | Request Ref
-  | Acquire Ref
-  | Release Ref
+  | Request !Ref
+  | Acquire !Ref
+  | Release !Ref
 
   | Begin
   | End
 
   | Branch
 
-  | Enter Ref Program.Method
+  | Enter !Ref !Program.Method
 
-  | Read Location Value
-  | Write Location Value
+  | Read !Location !Value
+  | Write !Location !Value
 
 
   deriving (Show, Eq, Ord)

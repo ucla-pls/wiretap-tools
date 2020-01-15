@@ -2,6 +2,7 @@ module Wiretap.Utils where
 
 import qualified Data.List as L
 import qualified Data.Map as M
+import Data.Monoid
 import Control.Monad
 
 {-| a blackbird -}
@@ -22,6 +23,29 @@ combinations =
 crossproduct :: [a] -> [b] -> [(a, b)]
 crossproduct =
   liftM2 (,)
+
+{-| all possible pairs of one list -}
+crossproduct1 :: [a] -> [(a, a)]
+crossproduct1 l =
+  crossproduct l l
+
+-- | Group every element in the list in pairs, fails
+-- if the list does not contain at least one element
+pairwise :: (a -> a -> b) -> [a] -> [b]
+pairwise f es = zipWith f es (tail es)
+
+
+combinate :: ([a] -> [a] -> [a]) -> [[a]] -> [a]
+combinate f l =
+  case l of
+    a':[] -> a'
+    a':as -> f a' $ combinate f as
+    []    -> []
+
+product :: (a -> b -> c) -> [a] -> [b] -> [c]
+product f as bs =
+  [ f a b | a <- as, b <- bs ]
+
 
 groupOnFst :: Eq a
   => [(a, b)]
@@ -44,7 +68,7 @@ groupUnsortedOnFst :: Ord a
   => [(a, b)]
   -> [(a, [b])]
 groupUnsortedOnFst =
-  groupUnsortedOn fst ((:[]). snd)
+  map (\(a,f) -> (a, appEndo f [])) . groupUnsortedOn fst (\(_, b) -> Endo (b:))
 
 groupUnsortedOn :: (Ord a, Monoid m)
   => (x -> a)

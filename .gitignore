@@ -7,3 +7,6 @@ dist/
 
 # Ignore the biggest tests
 benchmark/
+
+.stack-work
+test/

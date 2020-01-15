@@ -21,18 +21,19 @@ import           Data.Binary
 import           Data.Binary.Get
 import           Data.Binary.Put
 import           GHC.Int
+import           System.IO  (withFile, IOMode (ReadMode))
 
-import qualified Data.IntMap          as IM
+import qualified Data.IntMap.Strict          as IM
 import           Data.Maybe
 
 import qualified Data.ByteString.Lazy as BL
 import           System.FilePath
 
 data Program = Program
-  { _fieldNames        :: IM.IntMap String
-  , _instructionNames  :: IM.IntMap String
-  , _methodNames       :: IM.IntMap String
-  , _instructionFolder :: Maybe FilePath
+  { _fieldNames        :: !(IM.IntMap String)
+  , _instructionNames  :: !(IM.IntMap String)
+  , _methodNames       :: !(IM.IntMap String)
+  , _instructionFolder :: !(Maybe FilePath)
   }
 
 fromFolder :: FilePath -> IO Program
@@ -64,8 +65,9 @@ findInstruction :: Program -> Int32 -> Int32 -> IO Instruction
 findInstruction p tid oid =
   case _instructionFolder p of
     Just folder -> do
-      bs <- BL.readFile (folder </> show tid)
-      return . decode $ BL.drop (fromIntegral oid * 4) bs
+      withFile (folder </> show tid) ReadMode $ \h -> do
+        bs <- BL.hGetContents h
+        return $! (decode $ BL.drop (fromIntegral oid * 4) bs)
     Nothing -> do
       return nullInst
 
